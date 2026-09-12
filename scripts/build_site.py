@@ -46,6 +46,9 @@ def main():
             b["gov_url"] = gov[k]["url"]
             b["gov_date"] = gov[k]["date"]
             b["gov_msg_url"] = gov[k].get("msg_url")
+            b["gov_post_id"] = gov[k].get("post_id")
+            b["gov_published_at"] = gov[k].get("published_at")
+            b["gov_modified_at"] = gov[k].get("modified_at")
         else:
             b["gov_url"] = None
             b["gov_date"] = None

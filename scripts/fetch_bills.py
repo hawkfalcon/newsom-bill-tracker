@@ -36,6 +36,7 @@ SEARCH_PATH = "/billSearchClient.xhtml"
 STATUS_PATH = "/billStatusClient.xhtml"
 NAV_PATH = "/billNavClient.xhtml"
 TEXT_PATH = "/billTextClient.xhtml"
+VOTES_PATH = "/billVotesClient.xhtml"
 DD_BASE = "https://calmatters.digitaldemocracy.org/bills"
 
 HEADERS = {
@@ -145,7 +146,7 @@ STATUS_LABELS = {"signed": "Signed", "vetoed": "Vetoed", "pending": "Awaiting ac
 
 
 # --------------------------------------------------------------------------
-# 3. Per-bill history (to get the exact action date + chapter number)
+# 3. Per-bill history (to get the exact Governor-facing action date)
 # --------------------------------------------------------------------------
 def parse_date_mmddyy(d):
     """'09/10/26' -> '2026-09-10'"""
@@ -194,34 +195,32 @@ def parse_status_page(html):
 
 
 def extract_action(summary, history, kind):
-    """Return (action_date, action_text, chapter_number)."""
+    """Return the Governor-facing action date and plain-language description."""
     if kind == "vetoed":
         for date, text in history:
             if "vetoed by" in text.lower():
-                return date, text, None
+                return date, text
     elif kind == "signed":
         for date, text in history:
-            low = text.lower()
-            if "chaptered by secretary of state" in low:
-                ch = re.search(r"chapter\s+(\d+)", low)
-                return date, text, ch.group(1) if ch else None
-        # History may lag the summary (chaptering just recorded); fall back to
-        # the "Chaptered Date:" summary field without a chapter number.
-        if summary.get("Chaptered Date"):
-            return summary["Chaptered Date"], "Chaptered by Secretary of State.", None
-        for date, text in history:
             if "approved by the governor" in text.lower():
-                return date, text, None
+                return date, "Signed by the Governor."
+        # History may lag the newest signing record. The date remains useful,
+        # but keep the description focused on the Governor's decision.
+        if summary.get("Chaptered Date"):
+            return summary["Chaptered Date"], "Signed by the Governor."
+        for date, text in history:
+            if "chaptered by secretary of state" in text.lower():
+                return date, "Signed by the Governor."
     elif kind == "pending":
         for date, text in history:
             if "presented to the governor" in text.lower():
-                return date, text, None
+                return date, text
         for date, text in history:
             if "enrolled" in text.lower():
-                return date, text, None
+                return date, text
         if summary.get("Enrolled Date"):
-            return summary["Enrolled Date"], "Enrolled.", None
-    return None, None, None
+            return summary["Enrolled Date"], "Enrolled."
+    return None, None
 
 
 def fetch_one(bill):
@@ -239,11 +238,11 @@ def fetch_one(bill):
             last_err = str(exc)[:120]
             time.sleep(0.5)
     else:
-        return {**bill, "action_date": None, "action": None, "chapter": None,
+        return {**bill, "action_date": None, "action": None,
                 "error": last_err or "empty status page after retries"}
 
     kind = classify(bill["status"])
-    date, text, chapter = extract_action(summary, history, kind)
+    date, text = extract_action(summary, history, kind)
 
     summary_text = None
     try:
@@ -252,8 +251,15 @@ def fetch_one(bill):
     except Exception:  # noqa: BLE001 - summary is a nice-to-have
         summary_text = None
 
-    return {**bill, "action_date": date, "action": text, "chapter": chapter,
-            "summary": summary_text, "error": None}
+    latest_vote = None
+    try:
+        time.sleep(random.uniform(0.05, 0.15))  # be polite
+        latest_vote = parse_latest_vote(fetch_votes(bill_id), bill_id)
+    except Exception:  # noqa: BLE001 - vote data is a nice-to-have
+        latest_vote = None
+
+    return {**bill, "action_date": date, "action": text,
+            "summary": summary_text, "latest_vote": latest_vote, "error": None}
 
 
 # --------------------------------------------------------------------------
@@ -280,6 +286,74 @@ def fetch_digest(bill_id):
     r = session_for_thread().get(BASE + TEXT_PATH + f"?bill_id={bill_id}", timeout=45)
     r.raise_for_status()
     return r.text
+
+
+def fetch_votes(bill_id):
+    r = session_for_thread().get(BASE + VOTES_PATH + f"?bill_id={bill_id}", timeout=45)
+    r.raise_for_status()
+    return r.text
+
+
+def _page_lines(page_html):
+    """Turn a LegInfo page into label/value-friendly text lines."""
+    text = re.sub(r"<script\b.*?</script>|<style\b.*?</style>", " ", page_html,
+                  flags=re.I | re.S)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(?:div|p|tr|td|th|li|h[1-6]|label|span)>", "\n", text,
+                  flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_mod.unescape(text)
+    return [re.sub(r"\s+", " ", line).strip() for line in text.splitlines() if line.strip()]
+
+
+def _vote_number(value):
+    m = re.search(r"\d+", value or "")
+    return int(m.group()) if m else None
+
+
+def parse_latest_vote(votes_html, bill_id=None):
+    """Return the newest recorded roll call from a Bill Votes page.
+
+    LegInfo renders each roll call as a sequence of labels and values (Date,
+    Result, Location, Ayes Count, Noes Count, NVR Count, Motion).  This keeps
+    only the compact result needed by the tracker rather than copying every
+    legislator's individual vote into the static site.
+    """
+    lines = _page_lines(votes_html)
+    date_re = re.compile(r"^\d{2}/\d{2}/\d{2}$")
+    votes = []
+
+    for i, line in enumerate(lines):
+        if line != "Date" or i + 1 >= len(lines) or not date_re.fullmatch(lines[i + 1]):
+            continue
+        block = lines[i:i + 30]
+
+        def value_after(label):
+            try:
+                j = block.index(label) + 1
+            except ValueError:
+                return None
+            return block[j] if j < len(block) else None
+
+        ayes = _vote_number(value_after("Ayes Count"))
+        noes = _vote_number(value_after("Noes Count"))
+        if ayes is None or noes is None:
+            continue
+        date = parse_date_mmddyy(lines[i + 1])
+        if not date:
+            continue
+        votes.append({
+            "date": date,
+            "result": value_after("Result"),
+            "location": value_after("Location"),
+            "ayes": ayes,
+            "noes": noes,
+            "nvr": _vote_number(value_after("NVR Count")),
+            "motion": value_after("Motion"),
+            "url": BASE + VOTES_PATH + f"?bill_id={bill_id}" if bill_id else None,
+        })
+
+    return max(votes, key=lambda v: v["date"]) if votes else None
 
 
 def extract_summary(digest_html, title):
@@ -393,8 +467,8 @@ def main():
             "status_label": STATUS_LABELS[classify(r["status"])],
             "action_date": r.get("action_date"),
             "action": r.get("action"),
-            "chapter": r.get("chapter"),
             "summary": r.get("summary"),
+            "latest_vote": r.get("latest_vote"),
             "dd_url": f"{DD_BASE}/{slug(bid)}",
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",
         })

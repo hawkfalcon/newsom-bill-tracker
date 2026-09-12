@@ -25,8 +25,8 @@ only as the rich-detail page each bill links out to.
 1. **`scripts/fetch_bills.py`** — pulls the current session's full bill list
    from LegInfo, keeps every bill whose status is *Chaptered* (signed),
    *Vetoed*, or *Enrolled* (awaiting the Governor), then fetches each bill's
-   status page for the exact action date and chapter number. Outputs
-   `data/bills.json`.
+   status page for the exact Governor-action date. It also records the
+   latest roll-call result when LegInfo provides one. Outputs `data/bills.json`.
 
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official
    "legislative update" posts from gov.ca.gov's WordPress API and extracts the
@@ -121,8 +121,7 @@ python -m http.server 8000   # then open http://localhost:8000
   September signing window this can be a large list that shrinks as the
   Governor acts (last day to act on 2025–26 session bills: Sept 30, 2026).
 - LegInfo occasionally serves a redirect or lags a few hours on the newest
-  chaptering/veto lines; the scraper retries transient failures and falls back
-  to the "Chaptered Date" summary field, so a freshly-signed bill may briefly
-  appear without its chapter number.
+  signing/veto lines; the scraper retries transient failures and falls back
+  to LegInfo summary dates when the newest action history has not caught up.
 - This is an unofficial tracker. It is not affiliated with the Governor's
   office, the California Legislature, or CalMatters.

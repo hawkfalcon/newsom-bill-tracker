@@ -118,7 +118,6 @@
   .chip.signed{background:var(--green-soft);color:var(--green)}
   .chip.vetoed{background:var(--red-soft);color:var(--red)}
   .chip.pending{background:var(--amber-soft);color:var(--amber)}
-  .chip.chapter{background:#efeae1;color:#6b5d41}
 
   .ext{font-size:.78rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:8px;
     padding:4px 9px;white-space:nowrap;transition:color .1s, border-color .1s}
@@ -188,7 +187,7 @@
       <div class="stat sign" id="stat-sign" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle signed bills in the list">
         <div class="n" id="n-sign">–</div>
         <div class="l">Signed</div>
-        <div class="sub">Chaptered into law</div>
+        <div class="sub">Signed by the Governor</div>
       </div>
       <div class="stat pend" id="stat-pend" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle bills awaiting action in the list">
         <div class="n" id="n-pend">–</div>
@@ -355,12 +354,15 @@ function rowHTML(b) {
   const summary = b.summary ? `<div class="summary">${esc(b.summary)}</div>` : "";
   const bits = [];
   if (b.author) bits.push(`Author: ${esc(b.author)}`);
-  if (b.action) bits.push(esc(b.action));
-  if (b.chapter && b.status === "signed") bits.push(`Chapter ${esc(b.chapter)}, Statutes`);
+  // Keep the list Governor-centric; the main row should not expose
+  // technical legislative-record details.
+  if (b.action && b.status !== "signed") bits.push(esc(b.action));
+  if (b.latest_vote && Number.isFinite(Number(b.latest_vote.ayes)) && Number.isFinite(Number(b.latest_vote.noes))) {
+    bits.push(`Latest vote: ${esc(b.latest_vote.ayes)}–${esc(b.latest_vote.noes)}`);
+  }
   const meta = bits.length ? `<div class="meta">${bits.join(" · ")}</div>` : "";
 
-  let chips = `<span class="chip ${m.chip}">${m.label}</span>`;
-  if (b.chapter && b.status === "signed") chips += `<span class="chip chapter">Ch. ${esc(b.chapter)}</span>`;
+  const chips = `<span class="chip ${m.chip}">${m.label}</span>`;
 
   const vetoMsg = (b.status === "vetoed" && b.gov_msg_url)
     ? `<a class="ext gov" href="${esc(b.gov_msg_url)}" target="_blank" rel="noopener" title="Governor's veto message (PDF)">Veto letter</a>`
