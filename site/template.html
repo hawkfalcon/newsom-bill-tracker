@@ -88,6 +88,10 @@
   .search input::placeholder{color:#a39c90}
   .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.5;pointer-events:none}
   .countnote{font-size:.82rem;color:var(--muted)}
+  .topic-control{display:flex;align-items:center;gap:7px;font-size:.8rem;font-weight:700;color:var(--muted);white-space:nowrap}
+  .topic-control select{font:inherit;font-weight:600;color:var(--ink);background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:10px 30px 10px 11px;cursor:pointer;max-width:220px}
+  .topic-control select:focus{outline:3px solid var(--blue-soft);border-color:var(--blue)}
 
   .note{background:var(--blue-soft);border:1px solid #cdd9e8;color:#25456b;border-radius:12px;
     padding:12px 16px;font-size:.88rem;margin:12px 0 4px}
@@ -109,6 +113,7 @@
   .summary{font-size:.84rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .meta{font-size:.8rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+  .meta .author-link{color:var(--blue);font-weight:650}
   .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
   .side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;white-space:nowrap}
   .date{font-size:.85rem;color:var(--muted)}
@@ -118,7 +123,7 @@
   .chip.signed{background:var(--green-soft);color:var(--green)}
   .chip.vetoed{background:var(--red-soft);color:var(--red)}
   .chip.pending{background:var(--amber-soft);color:var(--amber)}
-  .chip.chapter{background:#efeae1;color:#6b5d41}
+  .chip.topic{background:var(--blue-soft);color:var(--blue);font-weight:650}
 
   .ext{font-size:.78rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:8px;
     padding:4px 9px;white-space:nowrap;transition:color .1s, border-color .1s}
@@ -159,6 +164,8 @@
     .waves{width:100%}
     .waves button{flex:1 1 0;padding:9px 6px;font-size:.82rem}
     .search{flex:1 1 100%}
+    .topic-control{flex:1 1 100%;justify-content:space-between}
+    .topic-control select{flex:1;max-width:none}
     .countnote{flex:1 1 100%}
     .note{font-size:.84rem;padding:11px 13px}
   }
@@ -180,17 +187,17 @@
 
   <section class="hero">
     <div class="stats">
-      <div class="stat veto" id="stat-veto" tabindex="0" role="button" aria-label="Show vetoed bills">
+      <div class="stat veto" id="stat-veto" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle vetoed bills in the list">
         <div class="n" id="n-veto">–</div>
         <div class="l">Vetoed</div>
         <div class="sub">Rejected by the Governor</div>
       </div>
-      <div class="stat sign" id="stat-sign" tabindex="0" role="button" aria-label="Show signed bills">
+      <div class="stat sign" id="stat-sign" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle signed bills in the list">
         <div class="n" id="n-sign">–</div>
         <div class="l">Signed</div>
-        <div class="sub">Chaptered into law</div>
+        <div class="sub">Signed by the Governor</div>
       </div>
-      <div class="stat pend" id="stat-pend" tabindex="0" role="button" aria-label="Show bills awaiting action">
+      <div class="stat pend" id="stat-pend" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle bills awaiting action in the list">
         <div class="n" id="n-pend">–</div>
         <div class="l">Awaiting action</div>
         <div class="sub">On the Governor's desk</div>
@@ -208,6 +215,11 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
       <input id="q" type="search" placeholder="Search bill number, author, or subject…" autocomplete="off">
     </div>
+    <label class="topic-control" for="topicFilter" title="Topic labels are inferred from official bill text">Topic
+      <select id="topicFilter" aria-label="Filter bills by topic">
+        <option value="all">All topics</option>
+      </select>
+    </label>
     <div class="countnote" id="countnote"></div>
   </div>
 
@@ -237,6 +249,10 @@
       </div>
     </div>
     <div style="margin-top:10px">
+      Topic labels are approximate, deterministic matches against each bill's official title and digest.
+      Author names and chamber/district labels are matched to the 2025–26 legislative roster.
+    </div>
+    <div style="margin-top:10px">
       Auto-refreshed daily via GitHub Actions. Built __BUILD_TIME__.
     </div>
   </div>
@@ -259,11 +275,23 @@ const META = {
 };
 
 const bills = (DATA.bills || []).map(b => ({...b}));
+const TOPIC_OPTIONS = DATA.topic_options || ["Agriculture", "Budget", "Economy", "Education", "Energy", "Entertainment", "Environment", "Government", "Health", "Higher Education", "Housing", "Justice", "Labor", "Politics", "Poverty", "Technology", "Transportation", "Other"];
+const topicFilterEl = document.getElementById("topicFilter");
+topicFilterEl.innerHTML += TOPIC_OPTIONS
+  .map(topicName => `<option value="${esc(topicName)}">${esc(topicName)}</option>`)
+  .join("");
 
 document.getElementById("updatedAt").textContent = (DATA.generated_at || "").replace("T", " ").replace("Z", " UTC");
 
-let active = "vetoed";   // current status tab
-let wave = "2026";       // default to the current calendar-year wave
+const STATUS_ORDER = ["signed", "vetoed", "pending"];
+const WAVE_IDS = ["2025", "2026", "all"];
+const DEFAULT_STATUS = ["signed", "vetoed"]; // show signed + vetoed together by default
+const DEFAULT_WAVE = "2026";                 // default to the current calendar-year wave
+const CARD_IDS = {vetoed: "stat-veto", signed: "stat-sign", pending: "stat-pend"};
+
+let active = new Set(DEFAULT_STATUS); // which status cards are switched on
+let wave = DEFAULT_WAVE;
+let topic = "all";
 const qEl = document.getElementById("q");
 const listEl = document.getElementById("list");
 const noteEl = document.getElementById("countnote");
@@ -274,11 +302,51 @@ function esc(s) {
     {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+/* ---- Shareable filter state in the URL: ?status=signed,vetoed&wave=2026&q=… ---- */
+
+function readUrl() {
+  const p = new URLSearchParams(location.search);
+  const st = (p.get("status") || "")
+    .split(",").map(s => s.toLowerCase()).filter(s => STATUS_ORDER.includes(s));
+  if (st.length) active = new Set(st);
+  const w = p.get("wave");
+  if (w && WAVE_IDS.includes(w)) wave = w;
+  const t = p.get("topic");
+  if (t && TOPIC_OPTIONS.includes(t)) topic = t;
+  topicFilterEl.value = topic;
+  const q = p.get("q");
+  if (q !== null) qEl.value = q;
+}
+
+function syncUrl() {
+  // Assembled by hand (instead of URLSearchParams.toString()) so the comma in
+  // the status list stays literal — shareable links should read
+  // ?status=signed,vetoed, not ?status=signed%2Cvetoed.
+  const parts = [];
+  const st = STATUS_ORDER.filter(s => active.has(s));
+  if (st.join(",") !== DEFAULT_STATUS.join(",")) parts.push(`status=${st.join(",")}`);
+  if (wave !== DEFAULT_WAVE) parts.push(`wave=${wave}`);
+  if (topic !== "all") parts.push(`topic=${encodeURIComponent(topic)}`);
+  const q = qEl.value.trim();
+  if (q) parts.push(`q=${encodeURIComponent(q)}`);
+  const qs = parts.join("&");
+  try {
+    // Only non-default values are written, so the default view keeps a clean URL.
+    history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+  } catch (e) { /* replaceState can fail on file:// — filtering still works */ }
+}
+
 function waveBills() {
-  return wave === "all" ? bills : bills.filter(b => b.wave === wave);
+  const rows = wave === "all" ? bills : bills.filter(b => b.wave === wave);
+  return topic === "all" ? rows : rows.filter(b => (b.topics || []).includes(topic));
 }
 function inWave(status) {
   const rows = waveBills().filter(b => b.status === status);
+  rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
+  return rows;
+}
+function visibleBills() {
+  const rows = waveBills().filter(b => active.has(b.status));
   rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
   return rows;
 }
@@ -308,18 +376,46 @@ function updateWaveNote() {
     for what's happening today.</div>`;
 }
 
+function authorLabel(b) {
+  const info = b.author_info;
+  if (!info || !info.name) return b.author || "—";
+  const prefix = info.chamber === "Senate" ? "Sen." : "Asm.";
+  const district = info.district ? ` (${info.chamber === "Senate" ? "SD" : "AD"} ${info.district})` : "";
+  return `${prefix} ${info.name}${district}`;
+}
+
+function authorDDUrl(b) {
+  const info = b.author_info;
+  const name = info && info.name ? info.name : b.author;
+  if (!name) return null;
+  const author = encodeURIComponent(name).replace(/%20/g, "+");
+  return `https://calmatters.digitaldemocracy.org/bills#author=${author}&session_year%5B%5D=2025-2026`;
+}
+
+function authorMarkup(b) {
+  const label = esc(authorLabel(b));
+  const href = authorDDUrl(b);
+  return href
+    ? `<a class="author-link" href="${esc(href)}" target="_blank" rel="noopener" title="View this author's bills on Digital Democracy">${label}</a>`
+    : label;
+}
+
 function rowHTML(b) {
   const m = META[b.status];
   const subject = `<div class="title"><a href="${esc(b.dd_url)}" target="_blank" rel="noopener">${esc(b.title)}</a></div>`;
   const summary = b.summary ? `<div class="summary">${esc(b.summary)}</div>` : "";
   const bits = [];
-  if (b.author) bits.push(`Author: ${esc(b.author)}`);
-  if (b.action) bits.push(esc(b.action));
-  if (b.chapter && b.status === "signed") bits.push(`Chapter ${esc(b.chapter)}, Statutes`);
+  if (b.author) bits.push(`Author: ${authorMarkup(b)}`);
+  // Keep the list Governor-centric; the main row should not expose
+  // technical legislative-record details.
+  if (b.action && b.status !== "signed") bits.push(esc(b.action));
+  if (b.latest_vote && Number.isFinite(Number(b.latest_vote.ayes)) && Number.isFinite(Number(b.latest_vote.noes))) {
+    bits.push(`Latest vote: ${esc(b.latest_vote.ayes)}–${esc(b.latest_vote.noes)}`);
+  }
   const meta = bits.length ? `<div class="meta">${bits.join(" · ")}</div>` : "";
 
-  let chips = `<span class="chip ${m.chip}">${m.label}</span>`;
-  if (b.chapter && b.status === "signed") chips += `<span class="chip chapter">Ch. ${esc(b.chapter)}</span>`;
+  const topicChips = (b.topics || []).map(t => `<span class="chip topic">${esc(t)}</span>`).join("");
+  const chips = `<span class="chip ${m.chip}">${m.label}</span>${topicChips}`;
 
   const vetoMsg = (b.status === "vetoed" && b.gov_msg_url)
     ? `<a class="ext gov" href="${esc(b.gov_msg_url)}" target="_blank" rel="noopener" title="Governor's veto message (PDF)">Veto letter</a>`
@@ -334,7 +430,7 @@ function rowHTML(b) {
         <div class="links">
           ${b.gov_url ? `<a class="ext gov" href="${esc(b.gov_url)}" target="_blank" rel="noopener" title="Governor's official announcement (gov.ca.gov)">Gov ↗</a>` : ""}
           ${vetoMsg}
-          <a class="ext" href="${esc(b.dd_url)}" target="_blank" rel="noopener" title="View on Digital Democracy">DD ↗</a>
+          <a class="ext" href="${esc(b.dd_url)}" target="_blank" rel="noopener" title="View on Digital Democracy">Digital Democracy ↗</a>
           <a class="ext" href="${esc(b.leginfo_url)}" target="_blank" rel="noopener" title="View on LegInfo">LegInfo ↗</a>
         </div>
       </div>
@@ -343,47 +439,90 @@ function rowHTML(b) {
 
 function render() {
   const q = qEl.value.trim().toLowerCase();
-  const rows = inWave(active).filter(b => {
+  const all = visibleBills();
+  const rows = all.filter(b => {
     if (!q) return true;
-    return (b.measure + " " + b.title + " " + b.author + " " + (b.action || "")).toLowerCase().includes(q);
+    return [b.measure, b.title, b.author, authorLabel(b), ...(b.topics || []), b.action || ""]
+      .join(" ").toLowerCase().includes(q);
   });
 
-  const total = inWave(active).length;
-  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${total.toLocaleString()}` : "No matches";
+  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${all.length.toLocaleString()}` : "No matches";
   listEl.innerHTML = rows.length
     ? rows.map(rowHTML).join("")
-    : `<div class="empty">No bills match “${esc(qEl.value)}” in this list.</div>`;
+    : `<div class="empty">No bills match ${q ? `“${esc(q)}”` : "these filters"} in this list.</div>`;
 
-  document.querySelectorAll(".stat").forEach(el => el.classList.remove("active"));
-  const map = {vetoed:"stat-veto", signed:"stat-sign", pending:"stat-pend"};
-  document.getElementById(map[active]).classList.add("active");
+  for (const s of STATUS_ORDER) {
+    const el = document.getElementById(CARD_IDS[s]);
+    const on = active.has(s);
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-pressed", on ? "true" : "false");
+  }
 }
 
-function setActive(k) {
-  active = k;
+function toggleStatus(k) {
+  if (active.has(k)) {
+    if (active.size === 1) return; // always keep at least one status selected
+    active.delete(k);
+  } else {
+    active.add(k);
+  }
+  syncUrl();
   render();
   if (window.scrollY > 240) document.querySelector(".controls").scrollIntoView({behavior:"smooth"});
 }
 
+function syncWaveButtons() {
+  document.querySelectorAll("#waves button").forEach(b =>
+    b.classList.toggle("on", b.dataset.wave === wave));
+}
+
 function setWave(w) {
   wave = w;
-  document.querySelectorAll("#waves button").forEach(b =>
-    b.classList.toggle("on", b.dataset.wave === w));
+  syncWaveButtons();
+  syncUrl();
   updateCards();
   updateWaveNote();
   render();
 }
 
-document.getElementById("stat-veto").addEventListener("click", () => setActive("vetoed"));
-document.getElementById("stat-sign").addEventListener("click", () => setActive("signed"));
-document.getElementById("stat-pend").addEventListener("click", () => setActive("pending"));
+for (const s of STATUS_ORDER) {
+  const el = document.getElementById(CARD_IDS[s]);
+  el.addEventListener("click", () => toggleStatus(s));
+  el.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      toggleStatus(s);
+    }
+  });
+}
 document.querySelectorAll("#waves button").forEach(b =>
   b.addEventListener("click", () => setWave(b.dataset.wave)));
-qEl.addEventListener("input", render);
+qEl.addEventListener("input", () => { syncUrl(); render(); });
+topicFilterEl.addEventListener("change", () => {
+  topic = TOPIC_OPTIONS.includes(topicFilterEl.value) ? topicFilterEl.value : "all";
+  syncUrl();
+  updateCards();
+  updateWaveNote();
+  render();
+});
 
-updateCards();
-updateWaveNote();
-render();
+function applyState() {
+  topicFilterEl.value = topic;
+  syncWaveButtons();
+  updateCards();
+  updateWaveNote();
+  render();
+}
+window.addEventListener("popstate", () => {
+  active = new Set(DEFAULT_STATUS);
+  wave = DEFAULT_WAVE;
+  topic = "all";
+  qEl.value = "";
+  readUrl();
+  applyState();
+});
+readUrl();
+applyState();
 </script>
 </body>
 </html>

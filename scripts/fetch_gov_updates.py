@@ -131,11 +131,17 @@ def parse_post(post):
         signed_html = ""
 
     out = {}
+    common = {
+        "post_id": post.get("id"),
+        "published_at": post.get("date_gmt") or post.get("date"),
+        "modified_at": post.get("modified_gmt") or post.get("modified"),
+        "title": html_mod.unescape(title),
+    }
     for nid, measure, msg in parse_bill_items(signed_html):
-        out[nid] = {"action": "signed", "date": date, "url": url,
+        out[nid] = {**common, "action": "signed", "date": date, "url": url,
                     "msg_url": msg, "measure": measure}
     for nid, measure, msg in parse_bill_items(vetoed_html):
-        out[nid] = {"action": "vetoed", "date": date, "url": url,
+        out[nid] = {**common, "action": "vetoed", "date": date, "url": url,
                     "msg_url": msg, "measure": measure}
     return out
 

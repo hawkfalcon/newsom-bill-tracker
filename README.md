@@ -2,7 +2,8 @@
 
 A static GitHub Pages site that lists every California bill **Gov. Gavin Newsom
 signs or vetoes** in the current legislative session — plus the bills still
-sitting on his desk awaiting action. Each bill links to its page on
+sitting on his desk awaiting action. Each bill is tagged with broad, transparent
+topic labels and links to its page on
 [CalMatters' Digital Democracy](https://calmatters.digitaldemocracy.org/bills).
 
 **Live demo of the workflow:** the data and `index.html` in this repo were
@@ -19,13 +20,15 @@ The status engine uses **two independent sources**, cross-checked:
 
 Digital Democracy is **not** used for status — it scrapes LegInfo (so it lags)
 and it displays vetoed bills as "FAILED" with their last action (e.g.
-"Stricken from file") rather than the veto itself. DD is used only as the
-rich-detail page each bill links out to.
+"Stricken from file") rather than the veto itself. Digital Democracy is used
+only as the rich-detail page each bill links out to.
 
 1. **`scripts/fetch_bills.py`** — pulls the current session's full bill list
-   from LegInfo, keeps every bill whose status is *Chaptered* (signed),
-   *Vetoed*, or *Enrolled* (awaiting the Governor), then fetches each bill's
-   status page for the exact action date and chapter number. Outputs
+   from LegInfo, keeps every bill marked as signed, vetoed, or still enrolled
+   (awaiting the Governor), then fetches each bill's status page for the exact
+   Governor-action date. It also records the latest roll-call result when
+   LegInfo provides one and adds the local topic/author enrichment. Author
+   labels link to the matching author filter on Digital Democracy. Outputs
    `data/bills.json`.
 
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official
@@ -40,9 +43,16 @@ rich-detail page each bill links out to.
    `site/template.html`, writing a single self-contained `index.html`
    (no server, no build step, no external requests).
 
-4. **`.github/workflows/update.yml`** — a GitHub Actions workflow that runs the
-   three scripts **daily** (and on demand via "Run workflow") and commits the
-   refreshed files back to the repo.
+4. **`scripts/enrichment.py`** — assigns one or more broad topic labels from
+   the official bill title and Legislative Counsel digest, and matches the
+   LegInfo author label to `data/legislators.json` for a fuller name, chamber,
+   and district. The classifier is deterministic and nonpartisan; `Other` is
+   used when no clear subject signal is present. The topic labels are useful
+   navigation aids, not official Legislative Counsel subject classifications.
+
+5. **`.github/workflows/update.yml`** — a GitHub Actions workflow that runs the
+   three data scripts **daily** (and on demand via "Run workflow") and commits
+   the refreshed files back to the repo.
 
 ## Digital Democracy links
 
@@ -63,18 +73,43 @@ e.g. LegInfo `202520260AB302` → `ca_202520260ab302` →
    .
    ├── .github/workflows/update.yml
    ├── index.html              # generated (self-contained)
-   ├── data/bills.json         # generated (LegInfo)
+   ├── data/bills.json         # generated (LegInfo + local enrichment)
    ├── data/gov_actions.json   # generated (gov.ca.gov announcements)
+   ├── data/legislators.json   # 2025–26 roster used for author display
    ├── scripts/fetch_bills.py
    ├── scripts/fetch_gov_updates.py
+   ├── scripts/enrichment.py
    ├── scripts/build_site.py
    └── site/template.html
    ```
 
 2. In the repo: **Settings → Pages → Build and deployment → Source:
-   "Deploy from a branch" → Branch: `main`, folder `/ (root)` → Save.**
+   "Deploy from a branch" → Branch: `master` (the default branch — note it is
+   `master`, not `main`), folder `/ (root)` → Save.** The site then serves at
+   `https://<your-username>.github.io/<repo-name>/`.
 
-3. To refresh the data immediately: **Actions → "Refresh bill data" → Run workflow.**
+3. **If the Actions tab looks empty** even though
+   `.github/workflows/update.yml` exists, the repo has Actions switched off:
+   go to **Settings → Actions → General** and set **Workflow access** to
+   **"Read and write repository contents"** (the workflow pushes refreshed
+   data back to the repo, so read-only is not enough).
+
+4. To refresh the data immediately: **Actions → "Refresh bill data" → Run workflow.**
+
+## Shareable filter state
+
+The filter state lives in the URL, so any view can be linked or bookmarked:
+
+```
+https://<user>.github.io/<repo>/?status=signed,vetoed&wave=all&topic=Housing&q=housing
+```
+
+- **`status`** — comma-separated list of `signed`, `vetoed`, `pending`.
+  Defaults to `signed,vetoed` (both shown at once); the stat cards toggle
+  each one independently (at least one must stay on).
+- **`wave`** — `2025`, `2026`, or `all`. Defaults to `2026`.
+- **`topic`** — one of the broad topic labels, such as `Health`, `Housing`, or `Transportation`.
+- **`q`** — search text (bill number, author, topic, or subject).
 
 ## Run locally
 
@@ -95,12 +130,18 @@ python -m http.server 8000   # then open http://localhost:8000
   only for its batch signing/veto waves (mainly the Sept–Oct window), so bills
   signed earlier in the year may not have a Gov link. LegInfo is the complete
   record and the status source of truth either way.
-- **"Awaiting action"** = bills LegInfo lists as *Enrolled*. During the
+- **"Awaiting action"** = bills LegInfo lists as still enrolled. During the
   September signing window this can be a large list that shrinks as the
   Governor acts (last day to act on 2025–26 session bills: Sept 30, 2026).
+- Topic labels are deliberately broad and approximate. They are generated from
+  official title/digest text so the method is reviewable and refreshes without
+  a third-party classification API.
+- `data/legislators.json` records the official Assembly and Senate roster
+  sources used to turn surname-only author labels into full names and chamber/
+  district labels. Committee author labels remain unchanged; committee data is
+  not otherwise tracked.
 - LegInfo occasionally serves a redirect or lags a few hours on the newest
-  chaptering/veto lines; the scraper retries transient failures and falls back
-  to the "Chaptered Date" summary field, so a freshly-signed bill may briefly
-  appear without its chapter number.
+  signing/veto lines; the scraper retries transient failures and falls back
+  to LegInfo summary dates when the newest action history has not caught up.
 - This is an unofficial tracker. It is not affiliated with the Governor's
   office, the California Legislature, or CalMatters.
