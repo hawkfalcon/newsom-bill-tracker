@@ -64,6 +64,7 @@ function makeElement(id, extra = {}) {
   el.getAttribute = k => (k in el._attrs ? el._attrs[k] : null);
   el.addEventListener = (ev, fn) => { (el._listeners[ev] ||= []).push(fn); };
   el.click = () => (el._listeners.click || []).forEach(fn => fn({}));
+  el.change = () => (el._listeners.change || []).forEach(fn => fn({target: el}));
   el.press = key =>
     (el._listeners.keydown || []).forEach(fn =>
       fn({ key, preventDefault: () => {} }));
@@ -73,7 +74,7 @@ function makeElement(id, extra = {}) {
 function makeEnv(search) {
   const els = {};
   for (const id of ["updatedAt", "stat-veto", "n-veto", "stat-sign", "n-sign",
-                    "stat-pend", "n-pend", "waves", "q", "countnote", "wavenote", "list"]) {
+                    "stat-pend", "n-pend", "waves", "q", "topicFilter", "countnote", "wavenote", "list"]) {
     els[id] = makeElement(id);
   }
   const waveButtons = ["2026", "2025", "all"].map(w => {
@@ -149,7 +150,8 @@ console.log("B: load with ?status=pending&wave=all&q=education");
         "only Pending card active");
   const expected = bills.filter(b =>
     b.status === "pending" &&
-    (b.measure + " " + b.title + " " + b.author + " " + (b.action || "")).toLowerCase().includes("education")
+    [b.measure, b.title, b.author, b.author_info && b.author_info.name,
+      ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes("education")
   ).length;
   const n = rows(e.els.list);
   check(n === expected, `pending “education” matches = ${expected} (got ${n})`);
@@ -157,8 +159,26 @@ console.log("B: load with ?status=pending&wave=all&q=education");
         `countnote against all ${pendAll} pending (got “${e.els.countnote.textContent}”)`);
 }
 
-// ---------- scenario C: toggling ----------
-console.log("C: toggling statuses updates list + URL");
+// ---------- scenario C: topic filter ----------
+console.log("C: topic filter updates list + URL");
+{
+  const e = runPage("");
+  const expected = bills.filter(b => b.wave === DEF_WAVE &&
+    ["signed", "vetoed"].includes(b.status) && (b.topics || []).includes("Health")).length;
+  e.els.topicFilter.value = "Health";
+  e.els.topicFilter.change();
+  check(e.history.calls.at(-1) === "?topic=Health", `URL now ?topic=Health (got ${e.history.calls.at(-1)})`);
+  check(rows(e.els.list) === expected, `Health topic filter = ${expected} (got ${rows(e.els.list)})`);
+  check(e.els.topicFilter.value === "Health", "topic select stays in sync");
+
+  e.location.search = "?topic=Housing&wave=all";
+  e.window.fire("popstate");
+  check(e.els.topicFilter.value === "Housing" && e.waveButtons[2].classList.contains("on"),
+        "popstate applies topic and wave");
+}
+
+// ---------- scenario D: toggling ----------
+console.log("D: toggling statuses updates list + URL");
 {
   const e = runPage("");
   e.els["stat-sign"].click();                       // signed off
@@ -187,8 +207,8 @@ console.log("C: toggling statuses updates list + URL");
   check(rows(e.els.list) === defCount, "list back to default count");
 }
 
-// ---------- scenario D: wave + combined params ----------
-console.log("D: wave switching + combined URL");
+// ---------- scenario E: wave + combined params ----------
+console.log("E: wave switching + combined URL");
 {
   const e = runPage("");
   e.els["stat-sign"].click();                       // vetoed only
@@ -201,8 +221,8 @@ console.log("D: wave switching + combined URL");
   check(e.history.calls.at(-1) === "?status=vetoed", `wave param removed for default (got ${e.history.calls.at(-1)})`);
 }
 
-// ---------- scenario E: keyboard activation ----------
-console.log("E: keyboard (Enter/Space) activates cards");
+// ---------- scenario F: keyboard activation ----------
+console.log("F: keyboard (Enter/Space) activates cards");
 {
   const e = runPage("");
   e.els["stat-sign"].press("Enter");
@@ -211,8 +231,8 @@ console.log("E: keyboard (Enter/Space) activates cards");
   check(pressed(e.els["stat-sign"]), "Space toggles Signed back on");
 }
 
-// ---------- scenario F: popstate re-sync ----------
-console.log("F: popstate re-reads filter state from URL");
+// ---------- scenario G: popstate re-sync ----------
+console.log("G: popstate re-reads filter state from URL");
 {
   const e = runPage("");
   e.location.search = "?status=vetoed&wave=all";
@@ -223,8 +243,8 @@ console.log("F: popstate re-reads filter state from URL");
   check(rows(e.els.list) === veto2025 + veto2026, "all vetoes listed across waves");
 }
 
-// ---------- scenario G: invalid params fall back to defaults ----------
-console.log("G: invalid URL params ignored");
+// ---------- scenario H: invalid params fall back to defaults ----------
+console.log("H: invalid URL params ignored");
 {
   const e = runPage("?status=bogus&wave=1999&q=");
   check(rows(e.els.list) === defCount, "garbage params fall back to defaults");

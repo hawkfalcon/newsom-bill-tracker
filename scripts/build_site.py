@@ -15,6 +15,8 @@ import os
 import re
 from datetime import datetime, timezone
 
+from enrichment import enrich_payload
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -28,6 +30,10 @@ def main():
         data = json.load(f)
     with open(args.template, encoding="utf-8") as f:
         tpl = f.read()
+
+    # Keep checked-in snapshots and locally rebuilt pages consistent with the
+    # same topic and author enrichment used by the refresh job.
+    enrich_payload(data)
 
     # Merge the Governor's official announcements (gov.ca.gov) into each bill
     # as the "first to know" link. Kept independent from the LegInfo fetcher so

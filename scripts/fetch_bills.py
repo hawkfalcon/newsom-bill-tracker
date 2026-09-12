@@ -9,10 +9,10 @@ The site deep-links each bill to CalMatters' Digital Democracy:
 where <dd_slug> = "ca_" + lowercased leginfo bill_id
 (e.g. leginfo 202520260AB302 -> ca_202520260ab302).
 
-Status source of truth is LegInfo (the official record):
-  - "Chaptered"                -> signed into law
-  - "Vetoed"                   -> vetoed by the Governor
-  - "Enrolled"                 -> enrolled, on the Governor's desk (pending)
+LegInfo is the official source of truth for the three states tracked here:
+  - signed into law
+  - vetoed by the Governor
+  - enrolled and on the Governor's desk (pending)
 
 Usage:
     python scripts/fetch_bills.py [--session 20252026] [--workers 8] [--limit N]
@@ -30,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import requests
+
+from enrichment import enrich_payload
 
 BASE = "https://leginfo.legislature.ca.gov/faces"
 SEARCH_PATH = "/billSearchClient.xhtml"
@@ -87,7 +89,6 @@ def run_search(session, viewstate):
         "law_code": "All",
         "law_section_num": "",
         "statuteYear": "",
-        "chapter_number": "",
         "search_keywords": "",
         "hiddenSessionYr": SESSION,
         "hiddenHouse": "Both",
@@ -132,14 +133,18 @@ def parse_search_html(html):
 # --------------------------------------------------------------------------
 # 2. Classification
 # --------------------------------------------------------------------------
+LEGINFO_SIGNED_STATUS = "Chaptered"
+LEGINFO_VETOED_STATUS = "Vetoed"
+LEGINFO_PENDING_STATUS = "Enrolled"
+
+
 def classify(status):
-    if status == "Chaptered":
-        return "signed"
-    if status == "Vetoed":
-        return "vetoed"
-    if status == "Enrolled":
-        return "pending"
-    return None
+    status_map = {
+        LEGINFO_SIGNED_STATUS: "signed",
+        LEGINFO_VETOED_STATUS: "vetoed",
+        LEGINFO_PENDING_STATUS: "pending",
+    }
+    return status_map.get(status)
 
 
 STATUS_LABELS = {"signed": "Signed", "vetoed": "Vetoed", "pending": "Awaiting action"}
@@ -178,7 +183,12 @@ def parse_status_page(html):
         html, re.S,
     ):
         label = m.group(1).strip().rstrip(":")
-        summary[label] = parse_date_mmddyy(m.group(2).strip())
+        summary_key = {
+            f"{LEGINFO_SIGNED_STATUS} Date": "signed_date",
+            f"{LEGINFO_VETOED_STATUS} Date": "vetoed_date",
+            f"{LEGINFO_PENDING_STATUS} Date": "pending_date",
+        }.get(label, label.lower().replace(" ", "_"))
+        summary[summary_key] = parse_date_mmddyy(m.group(2).strip())
 
     rows = re.findall(
         r'<tr>\s*<td scope="row">(\d{2}/\d{2}/\d{2})</td>\s*<td>(.*?)</td>',
@@ -206,11 +216,8 @@ def extract_action(summary, history, kind):
                 return date, "Signed by the Governor."
         # History may lag the newest signing record. The date remains useful,
         # but keep the description focused on the Governor's decision.
-        if summary.get("Chaptered Date"):
-            return summary["Chaptered Date"], "Signed by the Governor."
-        for date, text in history:
-            if "chaptered by secretary of state" in text.lower():
-                return date, "Signed by the Governor."
+        if summary.get("signed_date"):
+            return summary["signed_date"], "Signed by the Governor."
     elif kind == "pending":
         for date, text in history:
             if "presented to the governor" in text.lower():
@@ -485,6 +492,7 @@ def main():
         "counts": counts,
         "bills": out_bills,
     }
+    enrich_payload(payload)
 
     import os
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)

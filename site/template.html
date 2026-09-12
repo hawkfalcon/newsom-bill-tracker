@@ -88,6 +88,10 @@
   .search input::placeholder{color:#a39c90}
   .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.5;pointer-events:none}
   .countnote{font-size:.82rem;color:var(--muted)}
+  .topic-control{display:flex;align-items:center;gap:7px;font-size:.8rem;font-weight:700;color:var(--muted);white-space:nowrap}
+  .topic-control select{font:inherit;font-weight:600;color:var(--ink);background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:10px 30px 10px 11px;cursor:pointer;max-width:220px}
+  .topic-control select:focus{outline:3px solid var(--blue-soft);border-color:var(--blue)}
 
   .note{background:var(--blue-soft);border:1px solid #cdd9e8;color:#25456b;border-radius:12px;
     padding:12px 16px;font-size:.88rem;margin:12px 0 4px}
@@ -118,6 +122,7 @@
   .chip.signed{background:var(--green-soft);color:var(--green)}
   .chip.vetoed{background:var(--red-soft);color:var(--red)}
   .chip.pending{background:var(--amber-soft);color:var(--amber)}
+  .chip.topic{background:var(--blue-soft);color:var(--blue);font-weight:650}
 
   .ext{font-size:.78rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:8px;
     padding:4px 9px;white-space:nowrap;transition:color .1s, border-color .1s}
@@ -158,6 +163,8 @@
     .waves{width:100%}
     .waves button{flex:1 1 0;padding:9px 6px;font-size:.82rem}
     .search{flex:1 1 100%}
+    .topic-control{flex:1 1 100%;justify-content:space-between}
+    .topic-control select{flex:1;max-width:none}
     .countnote{flex:1 1 100%}
     .note{font-size:.84rem;padding:11px 13px}
   }
@@ -207,6 +214,11 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
       <input id="q" type="search" placeholder="Search bill number, author, or subject…" autocomplete="off">
     </div>
+    <label class="topic-control" for="topicFilter" title="Topic labels are inferred from official bill text">Topic
+      <select id="topicFilter" aria-label="Filter bills by topic">
+        <option value="all">All topics</option>
+      </select>
+    </label>
     <div class="countnote" id="countnote"></div>
   </div>
 
@@ -236,6 +248,10 @@
       </div>
     </div>
     <div style="margin-top:10px">
+      Topic labels are approximate, deterministic matches against each bill's official title and digest.
+      Author names and chamber/district labels are matched to the 2025–26 legislative roster.
+    </div>
+    <div style="margin-top:10px">
       Auto-refreshed daily via GitHub Actions. Built __BUILD_TIME__.
     </div>
   </div>
@@ -258,6 +274,11 @@ const META = {
 };
 
 const bills = (DATA.bills || []).map(b => ({...b}));
+const TOPIC_OPTIONS = DATA.topic_options || ["Agriculture", "Budget", "Economy", "Education", "Energy", "Entertainment", "Environment", "Government", "Health", "Higher Education", "Housing", "Justice", "Labor", "Politics", "Poverty", "Technology", "Transportation", "Other"];
+const topicFilterEl = document.getElementById("topicFilter");
+topicFilterEl.innerHTML += TOPIC_OPTIONS
+  .map(topicName => `<option value="${esc(topicName)}">${esc(topicName)}</option>`)
+  .join("");
 
 document.getElementById("updatedAt").textContent = (DATA.generated_at || "").replace("T", " ").replace("Z", " UTC");
 
@@ -269,6 +290,7 @@ const CARD_IDS = {vetoed: "stat-veto", signed: "stat-sign", pending: "stat-pend"
 
 let active = new Set(DEFAULT_STATUS); // which status cards are switched on
 let wave = DEFAULT_WAVE;
+let topic = "all";
 const qEl = document.getElementById("q");
 const listEl = document.getElementById("list");
 const noteEl = document.getElementById("countnote");
@@ -288,6 +310,9 @@ function readUrl() {
   if (st.length) active = new Set(st);
   const w = p.get("wave");
   if (w && WAVE_IDS.includes(w)) wave = w;
+  const t = p.get("topic");
+  if (t && TOPIC_OPTIONS.includes(t)) topic = t;
+  topicFilterEl.value = topic;
   const q = p.get("q");
   if (q !== null) qEl.value = q;
 }
@@ -300,6 +325,7 @@ function syncUrl() {
   const st = STATUS_ORDER.filter(s => active.has(s));
   if (st.join(",") !== DEFAULT_STATUS.join(",")) parts.push(`status=${st.join(",")}`);
   if (wave !== DEFAULT_WAVE) parts.push(`wave=${wave}`);
+  if (topic !== "all") parts.push(`topic=${encodeURIComponent(topic)}`);
   const q = qEl.value.trim();
   if (q) parts.push(`q=${encodeURIComponent(q)}`);
   const qs = parts.join("&");
@@ -310,7 +336,8 @@ function syncUrl() {
 }
 
 function waveBills() {
-  return wave === "all" ? bills : bills.filter(b => b.wave === wave);
+  const rows = wave === "all" ? bills : bills.filter(b => b.wave === wave);
+  return topic === "all" ? rows : rows.filter(b => (b.topics || []).includes(topic));
 }
 function inWave(status) {
   const rows = waveBills().filter(b => b.status === status);
@@ -348,12 +375,20 @@ function updateWaveNote() {
     for what's happening today.</div>`;
 }
 
+function authorLabel(b) {
+  const info = b.author_info;
+  if (!info || !info.name) return b.author || "—";
+  const prefix = info.chamber === "Senate" ? "Sen." : "Asm.";
+  const district = info.district ? ` (${info.chamber === "Senate" ? "SD" : "AD"} ${info.district})` : "";
+  return `${prefix} ${info.name}${district}`;
+}
+
 function rowHTML(b) {
   const m = META[b.status];
   const subject = `<div class="title"><a href="${esc(b.dd_url)}" target="_blank" rel="noopener">${esc(b.title)}</a></div>`;
   const summary = b.summary ? `<div class="summary">${esc(b.summary)}</div>` : "";
   const bits = [];
-  if (b.author) bits.push(`Author: ${esc(b.author)}`);
+  if (b.author) bits.push(`Author: ${esc(authorLabel(b))}`);
   // Keep the list Governor-centric; the main row should not expose
   // technical legislative-record details.
   if (b.action && b.status !== "signed") bits.push(esc(b.action));
@@ -362,7 +397,8 @@ function rowHTML(b) {
   }
   const meta = bits.length ? `<div class="meta">${bits.join(" · ")}</div>` : "";
 
-  const chips = `<span class="chip ${m.chip}">${m.label}</span>`;
+  const topicChips = (b.topics || []).map(t => `<span class="chip topic">${esc(t)}</span>`).join("");
+  const chips = `<span class="chip ${m.chip}">${m.label}</span>${topicChips}`;
 
   const vetoMsg = (b.status === "vetoed" && b.gov_msg_url)
     ? `<a class="ext gov" href="${esc(b.gov_msg_url)}" target="_blank" rel="noopener" title="Governor's veto message (PDF)">Veto letter</a>`
@@ -389,7 +425,8 @@ function render() {
   const all = visibleBills();
   const rows = all.filter(b => {
     if (!q) return true;
-    return (b.measure + " " + b.title + " " + b.author + " " + (b.action || "")).toLowerCase().includes(q);
+    return [b.measure, b.title, b.author, authorLabel(b), ...(b.topics || []), b.action || ""]
+      .join(" ").toLowerCase().includes(q);
   });
 
   noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${all.length.toLocaleString()}` : "No matches";
@@ -444,8 +481,16 @@ for (const s of STATUS_ORDER) {
 document.querySelectorAll("#waves button").forEach(b =>
   b.addEventListener("click", () => setWave(b.dataset.wave)));
 qEl.addEventListener("input", () => { syncUrl(); render(); });
+topicFilterEl.addEventListener("change", () => {
+  topic = TOPIC_OPTIONS.includes(topicFilterEl.value) ? topicFilterEl.value : "all";
+  syncUrl();
+  updateCards();
+  updateWaveNote();
+  render();
+});
 
 function applyState() {
+  topicFilterEl.value = topic;
   syncWaveButtons();
   updateCards();
   updateWaveNote();
@@ -454,6 +499,7 @@ function applyState() {
 window.addEventListener("popstate", () => {
   active = new Set(DEFAULT_STATUS);
   wave = DEFAULT_WAVE;
+  topic = "all";
   qEl.value = "";
   readUrl();
   applyState();
