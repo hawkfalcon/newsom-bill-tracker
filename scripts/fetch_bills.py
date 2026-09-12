@@ -35,6 +35,7 @@ BASE = "https://leginfo.legislature.ca.gov/faces"
 SEARCH_PATH = "/billSearchClient.xhtml"
 STATUS_PATH = "/billStatusClient.xhtml"
 NAV_PATH = "/billNavClient.xhtml"
+TEXT_PATH = "/billTextClient.xhtml"
 DD_BASE = "https://calmatters.digitaldemocracy.org/bills"
 
 HEADERS = {
@@ -243,8 +244,67 @@ def fetch_one(bill):
 
     kind = classify(bill["status"])
     date, text, chapter = extract_action(summary, history, kind)
+
+    summary_text = None
+    try:
+        time.sleep(random.uniform(0.05, 0.15))  # be polite
+        summary_text = extract_summary(fetch_digest(bill_id), bill["title"])
+    except Exception:  # noqa: BLE001 - summary is a nice-to-have
+        summary_text = None
+
     return {**bill, "action_date": date, "action": text, "chapter": chapter,
-            "error": None}
+            "summary": summary_text, "error": None}
+
+
+# --------------------------------------------------------------------------
+# 4. Legislative Counsel's Digest (the "little description" of the bill)
+# --------------------------------------------------------------------------
+DIGEST_RE = re.compile(
+    r"DIGEST\s+((?:AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s]?\d+,.+?)Digest Key",
+    re.S,
+)
+
+
+def truncate(text, limit=280):
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for punct in (". ", "? ", "! ", "; "):
+        idx = cut.rfind(punct)
+        if idx > 60:
+            return cut[: idx + 1].rstrip() + " …"
+    return cut.rsplit(" ", 1)[0].rstrip() + " …"
+
+
+def fetch_digest(bill_id):
+    r = session_for_thread().get(BASE + TEXT_PATH + f"?bill_id={bill_id}", timeout=45)
+    r.raise_for_status()
+    return r.text
+
+
+def extract_summary(digest_html, title):
+    """Pull the digest body (what the bill does) from the bill text page and
+    return a short, sentence-aware summary."""
+    text = html_mod.unescape(re.sub(r"<[^>]+>", " ", digest_html))
+    text = re.sub(r"\s+", " ", text).strip()
+    m = DIGEST_RE.search(text)
+    if not m:
+        return None
+    digest = m.group(1).strip()
+    # Drop the "AB 123, Author." header.
+    digest = re.sub(
+        r"^(?:AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s]?\d+,\s*[^.]*\.\s*",
+        "", digest,
+    ).strip()
+    # Drop the short title if it leads the text.
+    t = (title or "").strip().rstrip(".")
+    if t:
+        i = digest.lower().find(t.lower())
+        if 0 <= i < 200:
+            digest = digest[i + len(t):].lstrip(" .").strip()
+    if not digest:
+        return None
+    return truncate(digest)
 
 
 # --------------------------------------------------------------------------
@@ -334,6 +394,7 @@ def main():
             "action_date": r.get("action_date"),
             "action": r.get("action"),
             "chapter": r.get("chapter"),
+            "summary": r.get("summary"),
             "dd_url": f"{DD_BASE}/{slug(bid)}",
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",
         })
