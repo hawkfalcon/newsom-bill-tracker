@@ -11,12 +11,15 @@ Usage:
 
 import argparse
 import json
+import os
+import re
 from datetime import datetime, timezone
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/bills.json")
+    ap.add_argument("--gov", default="data/gov_actions.json")
     ap.add_argument("--template", default="site/template.html")
     ap.add_argument("--out", default="index.html")
     args = ap.parse_args()
@@ -25,6 +28,26 @@ def main():
         data = json.load(f)
     with open(args.template, encoding="utf-8") as f:
         tpl = f.read()
+
+    # Merge the Governor's official announcements (gov.ca.gov) into each bill
+    # as the "first to know" link. Kept independent from the LegInfo fetcher so
+    # either source can refresh on its own.
+    def norm(m):
+        return re.sub(r"[^a-z0-9]", "", m.lower())
+
+    gov = {}
+    if os.path.exists(args.gov):
+        with open(args.gov, encoding="utf-8") as f:
+            gov = json.load(f).get("actions", {})
+
+    for b in data.get("bills", []):
+        k = norm(b.get("measure", ""))
+        if k in gov and gov[k]["action"] == b.get("status"):
+            b["gov_url"] = gov[k]["url"]
+            b["gov_date"] = gov[k]["date"]
+        else:
+            b["gov_url"] = None
+            b["gov_date"] = None
 
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     # Escape "<" so no "</script>" sequence can appear inside the inline JSON.

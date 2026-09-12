@@ -102,6 +102,8 @@
   .chip.chapter{background:#efeae1;color:#6b5d41;margin-left:6px}
   .ext{font-size:.78rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:3px 8px}
   .ext:hover{color:var(--blue);border-color:var(--blue)}
+  .ext.gov{color:#7a5c00;border-color:#e6d5a3;background:#fdf7e9}
+  .ext.gov:hover{color:#5c4400;border-color:#7a5c00}
 
   .empty{padding:40px 20px;text-align:center;color:var(--muted);background:var(--card);border:1px dashed var(--line);border-radius:12px}
 
@@ -168,9 +170,11 @@
     <div class="cols">
       <div>
         <strong>Session</strong> <span id="sessionLabel">2025–26</span> ·
-        bill actions on the Governor's desk are compiled from
+        sign/veto status from
         <a href="https://leginfo.legislature.ca.gov" target="_blank" rel="noopener">LegInfo</a>
-        (official legislative record).
+        (official record), cross-checked against the Governor's own
+        <a href="https://www.gov.ca.gov" target="_blank" rel="noopener">office announcements</a>
+        (the first public source — the <span class="ext gov" style="pointer-events:none">Gov ↗</span> link).
       </div>
       <div>
         <a href="https://calmatters.digitaldemocracy.org/bills" target="_blank" rel="noopener">Browse all bills on Digital Democracy →</a>
@@ -245,6 +249,7 @@ function rowHTML(b) {
       <div>${subject}${meta}${chip}</div>
       <div class="date">${fmtDate(b.action_date)}</div>
       <div class="links">
+        ${b.gov_url ? `<a class="ext gov" href="${esc(b.gov_url)}" target="_blank" rel="noopener" title="Governor's official announcement (gov.ca.gov)">Gov ↗</a>` : ""}
         <a class="ext" href="${esc(b.dd_url)}" target="_blank" rel="noopener" title="View on Digital Democracy">DD ↗</a>
         <a class="ext" href="${esc(b.leginfo_url)}" target="_blank" rel="noopener" title="View on LegInfo">LegInfo ↗</a>
       </div>

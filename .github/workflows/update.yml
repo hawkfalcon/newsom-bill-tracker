@@ -30,14 +30,17 @@ jobs:
       - name: Fetch bills from LegInfo
         run: python scripts/fetch_bills.py --out data/bills.json
 
+      - name: Fetch Governor's office announcements
+        run: python scripts/fetch_gov_updates.py --out data/gov_actions.json
+
       - name: Build static site
-        run: python scripts/build_site.py --data data/bills.json --template site/template.html --out index.html
+        run: python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json --template site/template.html --out index.html
 
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/bills.json index.html
+          git add data/bills.json data/gov_actions.json index.html
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
