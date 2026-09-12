@@ -27,7 +27,8 @@ only as the rich-detail page each bill links out to.
    from LegInfo, keeps every bill marked as signed, vetoed, or still enrolled
    (awaiting the Governor), then fetches each bill's status page for the exact
    Governor-action date. It also records the latest roll-call result when
-   LegInfo provides one and adds the local topic/author enrichment. Outputs
+   LegInfo provides one and adds the local topic/author enrichment. Author
+   labels link to the matching author filter on Digital Democracy. Outputs
    `data/bills.json`.
 
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official

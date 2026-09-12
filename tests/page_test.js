@@ -137,6 +137,9 @@ console.log("A: default load (no URL params)");
   check(pressed(e.els["stat-sign"]) && e.els["stat-sign"].classList.contains("active"), "Signed card active by default");
   check(pressed(e.els["stat-veto"]) && e.els["stat-veto"].classList.contains("active"), "Vetoed card active by default");
   check(!pressed(e.els["stat-pend"]) && !e.els["stat-pend"].classList.contains("active"), "Pending card off by default");
+  check(e.els.list.innerHTML.includes("class=\"author-link\"") &&
+        e.els.list.innerHTML.includes("https://calmatters.digitaldemocracy.org/bills#author="),
+        "author labels link to Digital Democracy author filters");
   check(e.history.calls.length === 0, "URL stays clean on default load");
 }
 

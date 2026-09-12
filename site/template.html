@@ -113,6 +113,7 @@
   .summary{font-size:.84rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .meta{font-size:.8rem;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+  .meta .author-link{color:var(--blue);font-weight:650}
   .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
   .side{display:flex;flex-direction:column;align-items:flex-end;gap:8px;white-space:nowrap}
   .date{font-size:.85rem;color:var(--muted)}
@@ -383,12 +384,28 @@ function authorLabel(b) {
   return `${prefix} ${info.name}${district}`;
 }
 
+function authorDDUrl(b) {
+  const info = b.author_info;
+  const name = info && info.name ? info.name : b.author;
+  if (!name) return null;
+  const author = encodeURIComponent(name).replace(/%20/g, "+");
+  return `https://calmatters.digitaldemocracy.org/bills#author=${author}&session_year%5B%5D=2025-2026`;
+}
+
+function authorMarkup(b) {
+  const label = esc(authorLabel(b));
+  const href = authorDDUrl(b);
+  return href
+    ? `<a class="author-link" href="${esc(href)}" target="_blank" rel="noopener" title="View this author's bills on Digital Democracy">${label}</a>`
+    : label;
+}
+
 function rowHTML(b) {
   const m = META[b.status];
   const subject = `<div class="title"><a href="${esc(b.dd_url)}" target="_blank" rel="noopener">${esc(b.title)}</a></div>`;
   const summary = b.summary ? `<div class="summary">${esc(b.summary)}</div>` : "";
   const bits = [];
-  if (b.author) bits.push(`Author: ${esc(authorLabel(b))}`);
+  if (b.author) bits.push(`Author: ${authorMarkup(b)}`);
   // Keep the list Governor-centric; the main row should not expose
   // technical legislative-record details.
   if (b.action && b.status !== "signed") bits.push(esc(b.action));
