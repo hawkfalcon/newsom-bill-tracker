@@ -1,0 +1,46 @@
+name: Refresh bill data
+
+on:
+  schedule:
+    # ~6:17am Pacific daily (13:17 UTC). During the September signing window
+    # the Governor acts in batches, so a daily refresh keeps the site current.
+    - cron: "17 13 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch bills from LegInfo
+        run: python scripts/fetch_bills.py --out data/bills.json
+
+      - name: Build static site
+        run: python scripts/build_site.py --data data/bills.json --template site/template.html --out index.html
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/bills.json index.html
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: refresh bill data ($(date -u +%Y-%m-%d))"
+            git push
+          fi
