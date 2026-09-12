@@ -72,9 +72,17 @@ e.g. LegInfo `202520260AB302` → `ca_202520260ab302` →
    ```
 
 2. In the repo: **Settings → Pages → Build and deployment → Source:
-   "Deploy from a branch" → Branch: `main`, folder `/ (root)` → Save.**
+   "Deploy from a branch" → Branch: `master` (the default branch — note it is
+   `master`, not `main`), folder `/ (root)` → Save.** The site then serves at
+   `https://<your-username>.github.io/<repo-name>/`.
 
-3. To refresh the data immediately: **Actions → "Refresh bill data" → Run workflow.**
+3. **If the Actions tab looks empty** even though
+   `.github/workflows/update.yml` exists, the repo has Actions switched off:
+   go to **Settings → Actions → General** and set **Workflow access** to
+   **"Read and write repository contents"** (the workflow pushes refreshed
+   data back to the repo, so read-only is not enough).
+
+4. To refresh the data immediately: **Actions → "Refresh bill data" → Run workflow.**
 
 ## Run locally
 
