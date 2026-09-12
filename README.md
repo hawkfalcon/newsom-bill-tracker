@@ -19,8 +19,8 @@ The status engine uses **two independent sources**, cross-checked:
 
 Digital Democracy is **not** used for status — it scrapes LegInfo (so it lags)
 and it displays vetoed bills as "FAILED" with their last action (e.g.
-"Stricken from file") rather than the veto itself. DD is used only as the
-rich-detail page each bill links out to.
+"Stricken from file") rather than the veto itself. Digital Democracy is used
+only as the rich-detail page each bill links out to.
 
 1. **`scripts/fetch_bills.py`** — pulls the current session's full bill list
    from LegInfo, keeps every bill whose status is *Chaptered* (signed),
