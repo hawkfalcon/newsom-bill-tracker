@@ -180,17 +180,17 @@
 
   <section class="hero">
     <div class="stats">
-      <div class="stat veto" id="stat-veto" tabindex="0" role="button" aria-label="Show vetoed bills">
+      <div class="stat veto" id="stat-veto" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle vetoed bills in the list">
         <div class="n" id="n-veto">–</div>
         <div class="l">Vetoed</div>
         <div class="sub">Rejected by the Governor</div>
       </div>
-      <div class="stat sign" id="stat-sign" tabindex="0" role="button" aria-label="Show signed bills">
+      <div class="stat sign" id="stat-sign" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle signed bills in the list">
         <div class="n" id="n-sign">–</div>
         <div class="l">Signed</div>
         <div class="sub">Chaptered into law</div>
       </div>
-      <div class="stat pend" id="stat-pend" tabindex="0" role="button" aria-label="Show bills awaiting action">
+      <div class="stat pend" id="stat-pend" tabindex="0" role="button" aria-pressed="false" aria-label="Toggle bills awaiting action in the list">
         <div class="n" id="n-pend">–</div>
         <div class="l">Awaiting action</div>
         <div class="sub">On the Governor's desk</div>
@@ -237,7 +237,7 @@
       </div>
     </div>
     <div style="margin-top:10px">
-      Auto-refreshed daily via GitHub Actions. Built 2026-09-12 01:33 UTC.
+      Auto-refreshed daily via GitHub Actions. Built 2026-09-12 04:07 UTC.
     </div>
   </div>
 </footer>
@@ -262,8 +262,14 @@ const bills = (DATA.bills || []).map(b => ({...b}));
 
 document.getElementById("updatedAt").textContent = (DATA.generated_at || "").replace("T", " ").replace("Z", " UTC");
 
-let active = "vetoed";   // current status tab
-let wave = "2026";       // default to the current calendar-year wave
+const STATUS_ORDER = ["signed", "vetoed", "pending"];
+const WAVE_IDS = ["2025", "2026", "all"];
+const DEFAULT_STATUS = ["signed", "vetoed"]; // show signed + vetoed together by default
+const DEFAULT_WAVE = "2026";                 // default to the current calendar-year wave
+const CARD_IDS = {vetoed: "stat-veto", signed: "stat-sign", pending: "stat-pend"};
+
+let active = new Set(DEFAULT_STATUS); // which status cards are switched on
+let wave = DEFAULT_WAVE;
 const qEl = document.getElementById("q");
 const listEl = document.getElementById("list");
 const noteEl = document.getElementById("countnote");
@@ -274,11 +280,46 @@ function esc(s) {
     {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+/* ---- Shareable filter state in the URL: ?status=signed,vetoed&wave=2026&q=… ---- */
+
+function readUrl() {
+  const p = new URLSearchParams(location.search);
+  const st = (p.get("status") || "")
+    .split(",").map(s => s.toLowerCase()).filter(s => STATUS_ORDER.includes(s));
+  if (st.length) active = new Set(st);
+  const w = p.get("wave");
+  if (w && WAVE_IDS.includes(w)) wave = w;
+  const q = p.get("q");
+  if (q !== null) qEl.value = q;
+}
+
+function syncUrl() {
+  // Assembled by hand (instead of URLSearchParams.toString()) so the comma in
+  // the status list stays literal — shareable links should read
+  // ?status=signed,vetoed, not ?status=signed%2Cvetoed.
+  const parts = [];
+  const st = STATUS_ORDER.filter(s => active.has(s));
+  if (st.join(",") !== DEFAULT_STATUS.join(",")) parts.push(`status=${st.join(",")}`);
+  if (wave !== DEFAULT_WAVE) parts.push(`wave=${wave}`);
+  const q = qEl.value.trim();
+  if (q) parts.push(`q=${encodeURIComponent(q)}`);
+  const qs = parts.join("&");
+  try {
+    // Only non-default values are written, so the default view keeps a clean URL.
+    history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+  } catch (e) { /* replaceState can fail on file:// — filtering still works */ }
+}
+
 function waveBills() {
   return wave === "all" ? bills : bills.filter(b => b.wave === wave);
 }
 function inWave(status) {
   const rows = waveBills().filter(b => b.status === status);
+  rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
+  return rows;
+}
+function visibleBills() {
+  const rows = waveBills().filter(b => active.has(b.status));
   rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
   return rows;
 }
@@ -343,47 +384,80 @@ function rowHTML(b) {
 
 function render() {
   const q = qEl.value.trim().toLowerCase();
-  const rows = inWave(active).filter(b => {
+  const all = visibleBills();
+  const rows = all.filter(b => {
     if (!q) return true;
     return (b.measure + " " + b.title + " " + b.author + " " + (b.action || "")).toLowerCase().includes(q);
   });
 
-  const total = inWave(active).length;
-  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${total.toLocaleString()}` : "No matches";
+  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${all.length.toLocaleString()}` : "No matches";
   listEl.innerHTML = rows.length
     ? rows.map(rowHTML).join("")
-    : `<div class="empty">No bills match “${esc(qEl.value)}” in this list.</div>`;
+    : `<div class="empty">No bills match ${q ? `“${esc(q)}”` : "these filters"} in this list.</div>`;
 
-  document.querySelectorAll(".stat").forEach(el => el.classList.remove("active"));
-  const map = {vetoed:"stat-veto", signed:"stat-sign", pending:"stat-pend"};
-  document.getElementById(map[active]).classList.add("active");
+  for (const s of STATUS_ORDER) {
+    const el = document.getElementById(CARD_IDS[s]);
+    const on = active.has(s);
+    el.classList.toggle("active", on);
+    el.setAttribute("aria-pressed", on ? "true" : "false");
+  }
 }
 
-function setActive(k) {
-  active = k;
+function toggleStatus(k) {
+  if (active.has(k)) {
+    if (active.size === 1) return; // always keep at least one status selected
+    active.delete(k);
+  } else {
+    active.add(k);
+  }
+  syncUrl();
   render();
   if (window.scrollY > 240) document.querySelector(".controls").scrollIntoView({behavior:"smooth"});
 }
 
+function syncWaveButtons() {
+  document.querySelectorAll("#waves button").forEach(b =>
+    b.classList.toggle("on", b.dataset.wave === wave));
+}
+
 function setWave(w) {
   wave = w;
-  document.querySelectorAll("#waves button").forEach(b =>
-    b.classList.toggle("on", b.dataset.wave === w));
+  syncWaveButtons();
+  syncUrl();
   updateCards();
   updateWaveNote();
   render();
 }
 
-document.getElementById("stat-veto").addEventListener("click", () => setActive("vetoed"));
-document.getElementById("stat-sign").addEventListener("click", () => setActive("signed"));
-document.getElementById("stat-pend").addEventListener("click", () => setActive("pending"));
+for (const s of STATUS_ORDER) {
+  const el = document.getElementById(CARD_IDS[s]);
+  el.addEventListener("click", () => toggleStatus(s));
+  el.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      toggleStatus(s);
+    }
+  });
+}
 document.querySelectorAll("#waves button").forEach(b =>
   b.addEventListener("click", () => setWave(b.dataset.wave)));
-qEl.addEventListener("input", render);
+qEl.addEventListener("input", () => { syncUrl(); render(); });
 
-updateCards();
-updateWaveNote();
-render();
+function applyState() {
+  syncWaveButtons();
+  updateCards();
+  updateWaveNote();
+  render();
+}
+window.addEventListener("popstate", () => {
+  active = new Set(DEFAULT_STATUS);
+  wave = DEFAULT_WAVE;
+  qEl.value = "";
+  readUrl();
+  applyState();
+});
+readUrl();
+applyState();
 </script>
 </body>
 </html>

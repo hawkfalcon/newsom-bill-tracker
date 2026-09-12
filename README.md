@@ -84,6 +84,20 @@ e.g. LegInfo `202520260AB302` → `ca_202520260ab302` →
 
 4. To refresh the data immediately: **Actions → "Refresh bill data" → Run workflow.**
 
+## Shareable filter state
+
+The filter state lives in the URL, so any view can be linked or bookmarked:
+
+```
+https://<user>.github.io/<repo>/?status=signed,vetoed&wave=all&q=housing
+```
+
+- **`status`** — comma-separated list of `signed`, `vetoed`, `pending`.
+  Defaults to `signed,vetoed` (both shown at once); the stat cards toggle
+  each one independently (at least one must stay on).
+- **`wave`** — `2025`, `2026`, or `all`. Defaults to `2026`.
+- **`q`** — search text (bill number, author, or subject).
+
 ## Run locally
 
 ```bash
