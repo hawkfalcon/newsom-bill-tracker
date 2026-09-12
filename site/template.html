@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Every California bill signed or vetoed by Gov. Gavin Newsom in the current legislative session — linked to CalMatters' Digital Democracy.">
+<meta name="description" content="Every California bill signed or vetoed by Gov. Gavin Newsom in the current 2025–26 legislative session — linked to CalMatters' Digital Democracy.">
 <title>Newsom Bill Watch — Signed &amp; Vetoed</title>
 <style>
   :root{
@@ -65,6 +65,14 @@
   .stat.active{outline:3px solid var(--blue);outline-offset:2px}
 
   .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 6px}
+  .waves{display:flex;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+  .waves button{
+    border:0;background:transparent;padding:8px 14px;font-size:.85rem;font-weight:600;color:var(--muted);
+    border-radius:8px;cursor:pointer;white-space:nowrap;
+  }
+  .waves button.on{background:var(--blue);color:#fff}
+  .waves button .badge{font-size:.68rem;opacity:.85;font-weight:700}
+
   .search{flex:1 1 260px;position:relative}
   .search input{
     width:100%;padding:11px 14px 11px 38px;font-size:.95rem;border:1px solid var(--line);
@@ -73,6 +81,10 @@
   .search input:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
   .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.5}
   .countnote{font-size:.82rem;color:var(--muted)}
+
+  .note{background:var(--blue-soft);border:1px solid #cdd9e8;color:#25456b;border-radius:12px;
+    padding:12px 16px;font-size:.88rem;margin:12px 0 4px}
+  .note a{font-weight:700}
 
   .list-head{display:grid;grid-template-columns:110px 1fr 104px 74px;gap:12px;align-items:center;
     padding:10px 16px;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
@@ -85,6 +97,7 @@
   }
   @media(max-width:760px){
     .row{grid-template-columns:1fr;gap:6px}
+    .links{flex-wrap:wrap}
   }
   .measure{font-family:var(--mono);font-weight:700;font-size:.9rem;color:var(--blue);white-space:nowrap}
   .title{font-weight:600;font-size:.95rem}
@@ -118,7 +131,7 @@
   <div class="wrap">
     <div class="brand">
       <h1>Newsom Bill Watch</h1>
-      <span class="flag">California Legislature</span>
+      <span class="flag">California Legislature · 2025–26 session</span>
     </div>
     <div class="updated">Updated <strong id="updatedAt">—</strong></div>
   </div>
@@ -147,12 +160,19 @@
   </section>
 
   <div class="controls">
+    <div class="waves" id="waves" role="tablist" aria-label="Session wave">
+      <button data-wave="2026" class="on">Now · 2026</button>
+      <button data-wave="2025">2025 wave</button>
+      <button data-wave="all">All session</button>
+    </div>
     <div class="search">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
       <input id="q" type="search" placeholder="Search bill number, author, or subject…" autocomplete="off">
     </div>
     <div class="countnote" id="countnote"></div>
   </div>
+
+  <div id="wavenote"></div>
 
   <div class="list-head">
     <span>Bill</span>
@@ -169,20 +189,16 @@
   <div class="wrap">
     <div class="cols">
       <div>
-        <strong>Session</strong> <span id="sessionLabel">2025–26</span> ·
-        sign/veto status from
-        <a href="https://leginfo.legislature.ca.gov" target="_blank" rel="noopener">LegInfo</a>
-        (official record), cross-checked against the Governor's own
-        <a href="https://www.gov.ca.gov" target="_blank" rel="noopener">office announcements</a>
-        (the first public source — the <span class="ext gov" style="pointer-events:none">Gov ↗</span> link).
+        Sign/veto status from <a href="https://leginfo.legislature.ca.gov" target="_blank" rel="noopener">LegInfo</a>
+        (the official record), matched to the Governor's own
+        <a href="https://www.gov.ca.gov" target="_blank" rel="noopener">gov.ca.gov</a> announcements and
+        <a href="https://calmatters.digitaldemocracy.org" target="_blank" rel="noopener">Digital Democracy</a> bill pages.
       </div>
       <div>
         <a href="https://calmatters.digitaldemocracy.org/bills" target="_blank" rel="noopener">Browse all bills on Digital Democracy →</a>
       </div>
     </div>
     <div style="margin-top:10px">
-      Each bill links to its page on
-      <a href="https://calmatters.digitaldemocracy.org" target="_blank" rel="noopener">Digital Democracy by CalMatters</a>.
       Auto-refreshed daily via GitHub Actions. Built __BUILD_TIME__.
     </div>
   </div>
@@ -198,42 +214,65 @@ const fmtDate = s => {
   return dt.toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"});
 };
 
-const ORDER = ["vetoed", "signed", "pending"];
 const META = {
-  vetoed:  {key:"vetoed",  chip:"vetoed",  label:"Vetoed"},
-  signed:  {key:"signed",  chip:"signed",  label:"Signed"},
-  pending: {key:"pending", chip:"pending", label:"Awaiting action"},
+  vetoed:  {chip:"vetoed",  label:"Vetoed"},
+  signed:  {chip:"signed",  label:"Signed"},
+  pending: {chip:"pending", label:"Awaiting action"},
 };
 
 const bills = (DATA.bills || []).map(b => ({...b}));
 
-// headline stats
-const counts = DATA.counts || {};
-document.getElementById("n-veto").textContent = counts.vetoed ?? 0;
-document.getElementById("n-sign").textContent = counts.signed ?? 0;
-document.getElementById("n-pend").textContent = counts.pending ?? 0;
 document.getElementById("updatedAt").textContent = (DATA.generated_at || "").replace("T", " ").replace("Z", " UTC");
-document.getElementById("sessionLabel").textContent = DATA.session_label || "2025–26";
 
-let active = "vetoed";
+let active = "vetoed";   // current status tab
+let wave = "2026";       // default to the current calendar-year wave
 const qEl = document.getElementById("q");
 const listEl = document.getElementById("list");
 const noteEl = document.getElementById("countnote");
-
-const byKey = Object.fromEntries(ORDER.map(k => [k, bills.filter(b => b.status === k)]));
-// most recent action first
-for (const k of ORDER) {
-  byKey[k].sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
-}
+const waveNoteEl = document.getElementById("wavenote");
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+function waveBills() {
+  return wave === "all" ? bills : bills.filter(b => b.wave === wave);
+}
+function inWave(status) {
+  const rows = waveBills().filter(b => b.status === status);
+  rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
+  return rows;
+}
+
+function updateCards() {
+  document.getElementById("n-veto").textContent = inWave("vetoed").length;
+  document.getElementById("n-sign").textContent = inWave("signed").length;
+  document.getElementById("n-pend").textContent = inWave("pending").length;
+}
+
+function updateWaveNote() {
+  if (wave === "all") { waveNoteEl.innerHTML = ""; return; }
+  const v = inWave("vetoed").length;
+  const p = inWave("pending").length;
+  if (wave === "2026") {
+    waveNoteEl.innerHTML = `<div class="note">Newsom is acting on the 2026 bills
+      <strong>right now</strong> — his deadline is <strong>Sept 30, 2026</strong>.
+      So far this wave: <strong>${v} veto${v === 1 ? "" : "es"}</strong>,
+      <strong>${p.toLocaleString()}</strong> bills still awaiting his action.
+      Vetoes typically land in the final days before the deadline
+      (last fall's 123 vetoes all came Oct 1–13).</div>`;
+    return;
+  }
+  waveNoteEl.innerHTML = `<div class="note">The 2025 wave of this two-year session:
+    Newsom acted on these bills by Oct 13, 2025 — including
+    <strong>${v} vetoes</strong>. Use the “Now · 2026” tab
+    for what's happening today.</div>`;
+}
+
 function rowHTML(b) {
   const m = META[b.status];
-  let subject = `<div class="title"><a href="${esc(b.dd_url)}" target="_blank" rel="noopener">${esc(b.title)}</a></div>`;
+  const subject = `<div class="title"><a href="${esc(b.dd_url)}" target="_blank" rel="noopener">${esc(b.title)}</a></div>`;
   const bits = [];
   if (b.author) bits.push(`Author: ${esc(b.author)}`);
   if (b.action) bits.push(esc(b.action));
@@ -243,6 +282,10 @@ function rowHTML(b) {
   let chip = `<span class="chip ${m.chip}">${m.label}</span>`;
   if (b.chapter && b.status === "signed") chip += `<span class="chip chapter">Ch. ${esc(b.chapter)}</span>`;
 
+  const vetoMsg = (b.status === "vetoed" && b.gov_msg_url)
+    ? `<a class="ext gov" href="${esc(b.gov_msg_url)}" target="_blank" rel="noopener" title="Governor's veto message (PDF)">Veto letter</a>`
+    : "";
+
   return `
     <div class="row">
       <div class="measure">${esc(b.measure)}</div>
@@ -250,6 +293,7 @@ function rowHTML(b) {
       <div class="date">${fmtDate(b.action_date)}</div>
       <div class="links">
         ${b.gov_url ? `<a class="ext gov" href="${esc(b.gov_url)}" target="_blank" rel="noopener" title="Governor's official announcement (gov.ca.gov)">Gov ↗</a>` : ""}
+        ${vetoMsg}
         <a class="ext" href="${esc(b.dd_url)}" target="_blank" rel="noopener" title="View on Digital Democracy">DD ↗</a>
         <a class="ext" href="${esc(b.leginfo_url)}" target="_blank" rel="noopener" title="View on LegInfo">LegInfo ↗</a>
       </div>
@@ -258,17 +302,17 @@ function rowHTML(b) {
 
 function render() {
   const q = qEl.value.trim().toLowerCase();
-  const rows = byKey[active].filter(b => {
+  const rows = inWave(active).filter(b => {
     if (!q) return true;
     return (b.measure + " " + b.title + " " + b.author + " " + (b.action || "")).toLowerCase().includes(q);
   });
 
-  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${byKey[active].length.toLocaleString()}` : "No matches";
+  const total = inWave(active).length;
+  noteEl.textContent = rows.length ? `Showing ${rows.length.toLocaleString()} of ${total.toLocaleString()}` : "No matches";
   listEl.innerHTML = rows.length
     ? rows.map(rowHTML).join("")
     : `<div class="empty">No bills match “${esc(qEl.value)}” in this list.</div>`;
 
-  // highlight active stat card
   document.querySelectorAll(".stat").forEach(el => el.classList.remove("active"));
   const map = {vetoed:"stat-veto", signed:"stat-sign", pending:"stat-pend"};
   document.getElementById(map[active]).classList.add("active");
@@ -276,16 +320,28 @@ function render() {
 
 function setActive(k) {
   active = k;
-  qEl.value = "";
   render();
   if (window.scrollY > 240) document.querySelector(".controls").scrollIntoView({behavior:"smooth"});
+}
+
+function setWave(w) {
+  wave = w;
+  document.querySelectorAll("#waves button").forEach(b =>
+    b.classList.toggle("on", b.dataset.wave === w));
+  updateCards();
+  updateWaveNote();
+  render();
 }
 
 document.getElementById("stat-veto").addEventListener("click", () => setActive("vetoed"));
 document.getElementById("stat-sign").addEventListener("click", () => setActive("signed"));
 document.getElementById("stat-pend").addEventListener("click", () => setActive("pending"));
+document.querySelectorAll("#waves button").forEach(b =>
+  b.addEventListener("click", () => setWave(b.dataset.wave)));
 qEl.addEventListener("input", render);
 
+updateCards();
+updateWaveNote();
 render();
 </script>
 </body>

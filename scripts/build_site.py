@@ -45,9 +45,16 @@ def main():
         if k in gov and gov[k]["action"] == b.get("status"):
             b["gov_url"] = gov[k]["url"]
             b["gov_date"] = gov[k]["date"]
+            b["gov_msg_url"] = gov[k].get("msg_url")
         else:
             b["gov_url"] = None
             b["gov_date"] = None
+            b["gov_msg_url"] = None
+        # Two-year session = two waves of Governor action. Assign each bill to
+        # the calendar year its action took place (or its enrolled year while
+        # still pending).
+        d = b.get("action_date") or ""
+        b["wave"] = d[:4] if d else None
 
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     # Escape "<" so no "</script>" sequence can appear inside the inline JSON.
