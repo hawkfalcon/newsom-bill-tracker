@@ -22,6 +22,8 @@
     --amber:#8a5a00;
     --amber-soft:#fbf1de;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --control-h:42px;
+    --focus-ring:0 0 0 3px var(--blue-soft);
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
@@ -65,33 +67,39 @@
   .stat.veto .n{color:var(--red)} .stat.veto .l{color:var(--red)}
   .stat.sign .n{color:var(--green)} .stat.sign .l{color:var(--green)}
   .stat.pend .n{color:var(--amber)} .stat.pend .l{color:var(--amber)}
-  .stat.active{outline:3px solid var(--blue);outline-offset:2px}
+  .stat.active{border-color:#9bb3ce;box-shadow:0 0 0 3px var(--blue-soft),0 1px 2px rgba(20,20,20,.04)}
 
   .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:20px 0 6px}
-  .waves{display:flex;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+  .waves{display:flex;min-height:var(--control-h);align-items:center;background:var(--card);border:1px solid var(--line);
+    border-radius:10px;padding:3px;gap:3px;box-shadow:0 1px 2px rgba(20,20,20,.04)}
   .waves button{
-    border:0;background:transparent;padding:8px 14px;font-size:.85rem;font-weight:600;color:var(--muted);
+    min-height:34px;border:0;background:transparent;padding:7px 14px;font:inherit;font-size:.85rem;font-weight:600;color:var(--muted);
     border-radius:8px;cursor:pointer;white-space:nowrap;
   }
   .waves button:hover{color:var(--ink);background:var(--blue-soft)}
-  .waves button.on{background:var(--blue);color:#fff}
+  .waves button.on{background:var(--blue);color:#fff;box-shadow:0 1px 2px rgba(18,58,99,.18)}
   .waves button.on:hover{background:var(--blue);color:#fff}
-  .waves button:focus-visible{outline:3px solid var(--blue);outline-offset:1px}
+  .waves button:focus-visible{outline:3px solid var(--blue-soft);outline-offset:1px}
 
   .search{flex:1 1 240px;min-width:0;position:relative}
   .search input{
-    width:100%;padding:11px 14px 11px 38px;font-size:.95rem;border:1px solid var(--line);
-    border-radius:10px;background:var(--card);color:var(--ink);outline:none;
+    width:100%;height:var(--control-h);padding:10px 14px 10px 38px;font:inherit;font-size:.95rem;border:1px solid var(--line);
+    border-radius:10px;background:var(--card);color:var(--ink);outline:none;box-shadow:0 1px 2px rgba(20,20,20,.04);
     -webkit-appearance:none;appearance:none;
   }
-  .search input:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
+  .search input:focus{border-color:var(--blue);box-shadow:var(--focus-ring)}
   .search input::placeholder{color:#a39c90}
   .search svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.5;pointer-events:none}
-  .countnote{font-size:.82rem;color:var(--muted)}
-  .topic-control{display:flex;align-items:center;gap:7px;font-size:.8rem;font-weight:700;color:var(--muted);white-space:nowrap}
-  .topic-control select{font:inherit;font-weight:600;color:var(--ink);background:var(--card);border:1px solid var(--line);
-    border-radius:10px;padding:10px 30px 10px 11px;cursor:pointer;max-width:220px}
-  .topic-control select:focus{outline:3px solid var(--blue-soft);border-color:var(--blue)}
+  .countnote{font-size:.8rem;color:var(--muted);white-space:nowrap;margin-left:auto;padding:0 2px}
+  .topic-control{display:flex;height:var(--control-h);align-items:center;gap:5px;padding:3px 8px 3px 12px;
+    background:var(--card);border:1px solid var(--line);border-radius:10px;color:var(--muted);font-size:.72rem;font-weight:700;
+    letter-spacing:.07em;text-transform:uppercase;white-space:nowrap;box-shadow:0 1px 2px rgba(20,20,20,.04);transition:border-color .12s,box-shadow .12s}
+  .topic-control:focus-within{border-color:var(--blue);box-shadow:var(--focus-ring)}
+  .topic-control select{font:inherit;font-size:.88rem;font-weight:650;letter-spacing:0;text-transform:none;color:var(--ink);
+    background-color:transparent;background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);
+    background-position:calc(100% - 12px) 50%,calc(100% - 7px) 50%;background-repeat:no-repeat;background-size:5px 5px,5px 5px;
+    border:0;border-radius:7px;padding:7px 25px 7px 7px;cursor:pointer;max-width:205px;outline:none;
+    -webkit-appearance:none;appearance:none}
 
   .note{background:var(--blue-soft);border:1px solid #cdd9e8;color:#25456b;border-radius:12px;
     padding:12px 16px;font-size:.88rem;margin:12px 0 4px}
@@ -253,7 +261,7 @@
       Author names and chamber/district labels are matched to the 2025–26 legislative roster.
     </div>
     <div style="margin-top:10px">
-      Auto-refreshed daily via GitHub Actions. Built 2026-09-12 16:21 UTC.
+      Auto-refreshed daily via GitHub Actions. Built 2026-09-14 01:58 UTC.
     </div>
   </div>
 </footer>
