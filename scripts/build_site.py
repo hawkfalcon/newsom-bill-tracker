@@ -48,7 +48,11 @@ def main():
 
     for b in data.get("bills", []):
         k = norm(b.get("measure", ""))
-        if k in gov and gov[k]["action"] == b.get("status"):
+        gov_match = (
+            k in gov
+            and (gov[k]["action"] == b.get("status") or b.get("status") == "pending")
+        )
+        if gov_match:
             b["gov_url"] = gov[k]["url"]
             b["gov_date"] = gov[k]["date"]
             b["gov_msg_url"] = gov[k].get("msg_url")
