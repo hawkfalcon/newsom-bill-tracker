@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Fetch Gov. Gavin Newsom's official "legislative update" announcements from
-gov.ca.gov (WordPress REST API). These are the Governor's own office's
-same-day announcements of which bills he signed and vetoed — the first public
-source of the action — and each bill entry links to the official signing or
-veto message (usually a PDF).
+Fetch Gov. Gavin Newsom's official legislative announcements (signing batches,
+vetoes, and legislative updates) from gov.ca.gov (WordPress REST API).
+
+These are the Governor's own office's same-day announcements of which bills
+he signed and vetoed — the first public source of the action — and each bill
+entry links to the official signing or veto message (usually a PDF).
 
 Output: data/gov_actions.json
-  -> { "actions": { <norm_bill_id>: {action, date, url, msg_url} } }
+  -> { "actions": { <norm_bill_id>: {action, date, url, msg_url, measure, ...} } }
 
 Usage:
     python scripts/fetch_gov_updates.py [--after 2024-12-01] [--out data/gov_actions.json]
@@ -30,11 +31,32 @@ UA = (
 )
 HEADERS = {"User-Agent": UA, "Accept": "application/json"}
 
-SIGNED_MARKER = re.compile(r"signed the following", re.I)
-VETOED_MARKER = re.compile(r"vetoed the following", re.I)
-# "AB 70" / "SB 771" / "ABX1 2" / "AB-70" at the start of a bill line.
-BILL_AT_START = re.compile(
-    r"^\s*(AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s]?(\d+)\b",
+# Markers separating signed vs vetoed sections in announcement posts
+SIGNED_MARKER = re.compile(
+    r"(?:signed\s+the\s+following|signing\s+of\s+the\s+following|bills?\s+signed|signed\s+today|signed\s+into\s+law)",
+    re.I,
+)
+VETOED_MARKER = re.compile(
+    r"(?:vetoed?\s+the\s+following|vetoing\s+of\s+the\s+following|bills?\s+vetoed|vetoed\s+today)",
+    re.I,
+)
+
+# Matches batch action titles used by the Governor's press office, e.g.:
+# "Governor Newsom signs legislation 9.14.2026"
+# "Governor Newsom signs legislation 7.6.26"
+# "Acting Governor Monique Limón signs legislation 6.17.26"
+# "Governor Newsom issues legislative update 10.13.25"
+# "Governor Newsom issues legislative update 6.1.26"
+# "Governor Newsom vetoes legislation 10.1.25"
+BATCH_TITLE_RE = re.compile(
+    r"(?:signs?\s+legislation|legislative\s+update|veto(?:es)?\s+legislation|takes?\s+action\s+on\s+legislation|acts?\s+on\s+legislation|signed\s+legislation|vetoed\s+legislation)",
+    re.I,
+)
+
+# "AB 70" / "SB 771" / "ABX1 2" / "AB-70" at the start of a bill entry.
+BILL_PATTERN = re.compile(
+    r"(?:^|[>\n])\s*(?:[\u2022\u2023\u25E6\u2043\u2219\*\-–—•]\s*)?"
+    r"(AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s]?(\d+)\b",
     re.I,
 )
 
@@ -44,41 +66,70 @@ def norm(measure):
     return re.sub(r"[^a-z0-9]", "", measure.lower())
 
 
-def get_json(url, params, retries=3):
+def get_json(url, params, retries=4):
+    """Fetch JSON from url with params; return (data, total_pages)."""
     last = None
     for attempt in range(retries):
         try:
             r = requests.get(url, params=params, headers=HEADERS, timeout=45)
             if r.status_code == 200:
-                return r.json()
+                try:
+                    total_pages = int(r.headers.get("X-WP-TotalPages", 1))
+                except (ValueError, TypeError):
+                    total_pages = 1
+                return r.json(), total_pages
+            if r.status_code == 400 and "rest_post_invalid_page_number" in r.text:
+                return [], 0
             last = f"HTTP {r.status_code}"
         except Exception as exc:  # noqa: BLE001
             last = str(exc)
-        time.sleep(1 + attempt)
+        time.sleep(1 + attempt * 1.5)
     raise RuntimeError(f"failed to fetch {url}: {last}")
 
 
 def fetch_posts(after_iso):
-    """Return all 'legislative update' posts since `after_iso`."""
-    posts = []
-    page = 1
-    while True:
-        data = get_json(API, {
-            "search": "legislative update",
-            "after": after_iso,
-            "per_page": 100,
-            "page": page,
-            "orderby": "date",
-            "order": "desc",
-        })
-        if not data:
-            break
-        posts.extend(data)
-        if len(data) < 100:
-            break
-        page += 1
-        time.sleep(0.3)
-    return posts
+    """Return all candidate legislative update / bill signing posts since `after_iso`."""
+    queries = [
+        {"search": "legislat"},
+        {"search": "veto"},
+        {"tags": 189},  # Official WordPress "Legislation" tag
+    ]
+    posts_by_id = {}
+    for q_params in queries:
+        page = 1
+        while True:
+            params = {
+                **q_params,
+                "after": after_iso,
+                "per_page": 100,
+                "page": page,
+                "orderby": "date",
+                "order": "desc",
+            }
+            try:
+                data, total_pages = get_json(API, params)
+            except Exception as e:  # noqa: BLE001
+                print(f"  warning: query {q_params} page {page} failed: {e}")
+                break
+
+            if not data:
+                break
+
+            for p in data:
+                pid = p.get("id")
+                if pid:
+                    posts_by_id[pid] = p
+
+            if page >= total_pages or len(data) < 100:
+                break
+            page += 1
+            time.sleep(0.3)
+
+    return sorted(
+        posts_by_id.values(),
+        key=lambda p: p.get("date", ""),
+        reverse=True,
+    )
 
 
 def clean_html(fragment):
@@ -88,54 +139,94 @@ def clean_html(fragment):
     return re.sub(r"\s+", " ", html_mod.unescape(frag)).strip()
 
 
-def parse_bill_items(html_section):
-    """Parse an HTML list of '<li>BILL… <a href>…</a></li>' items.
+def extract_msg_url(chunk):
+    """Extract official signing/veto document link from HTML chunk."""
+    hrefs = re.findall(r'href=["\']([^"\']+)["\']', chunk)
+    for h in hrefs:
+        hl = h.lower()
+        if any(term in hl for term in ["wp-content", "veto", "signing", "message", ".pdf"]):
+            if not any(skip in hl for skip in ["leginfo", "list-manage", "twitter", "facebook", "instagram", "youtube", "linkedin"]):
+                return h
+    return None
 
+
+def parse_bill_items(html_section):
+    """Parse bill entries from HTML section.
+
+    Handles standard <li> tags, malformed </li>-only lines, <p> tags,
+    or newline-delimited lists.
     Returns list of (norm_id, measure_text, msg_url).
     """
     out = []
-    for li in re.findall(r"<li[^>]*>(.*?)</li>", html_section, re.S):
-        hrefs = re.findall(r'href="([^"]+)"', li)
-        text = clean_html(li)
-        m = BILL_AT_START.match(text)
-        if not m:
+    seen = set()
+    unescaped = html_mod.unescape(html_section)
+    matches = list(BILL_PATTERN.finditer(unescaped))
+    for i, m in enumerate(matches):
+        measure_type = m.group(1).upper()
+        num = m.group(2)
+        measure = f"{measure_type} {num}"
+        nid = norm(measure)
+        if nid in seen:
             continue
-        measure = m.group(1) + " " + m.group(2)
-        msg_url = hrefs[0] if hrefs else None
-        # Only keep message links that look like the official docs, not
-        # navigation or generic gov.ca.gov links.
-        if msg_url and ("wp-content" not in msg_url and "veto" not in msg_url.lower()
-                        and "signing" not in msg_url.lower() and "message" not in msg_url.lower()):
-            msg_url = None
-        out.append((norm(measure), measure, msg_url))
+        seen.add(nid)
+
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(unescaped)
+        chunk = unescaped[start:end]
+
+        # If this is the last bill, trim at list/section terminators to avoid capturing footer links
+        if i + 1 == len(matches):
+            term = re.search(r"(?:</ul>|</ol>|\[/et_pb_text\]|For\s+full\s+text|###)", chunk, re.I)
+            if term:
+                chunk = chunk[:term.start()]
+
+        msg_url = extract_msg_url(chunk)
+        out.append((nid, measure, msg_url))
     return out
 
 
 def parse_post(post):
     """Return {norm_bill_id: {action, date, url, msg_url, measure}}."""
     title = post.get("title", {}).get("rendered", "")
-    if "legislative update" not in title.lower():
-        return {}
+    title_clean = html_mod.unescape(title)
+    content = post.get("content", {}).get("rendered", "")
     date = post.get("date", "")[:10]
     url = post.get("link", "")
-    content = post.get("content", {}).get("rendered", "")
 
-    veto_split = VETOED_MARKER.split(content)
-    signed_html = veto_split[0]
-    vetoed_html = veto_split[1] if len(veto_split) > 1 else ""
+    # Post must look like a legislative update / bill action announcement:
+    # either by title match or by containing explicit signed/vetoed markers.
+    has_title_match = bool(BATCH_TITLE_RE.search(title_clean))
+    sm = SIGNED_MARKER.search(content)
+    vm = VETOED_MARKER.search(content)
 
-    sm = SIGNED_MARKER.search(signed_html)
-    if sm:
-        signed_html = signed_html[sm.end():]
-    elif vetoed_html:
-        signed_html = ""
+    if not has_title_match and not sm and not vm:
+        return {}
+
+    signed_html = ""
+    vetoed_html = ""
+
+    if sm and vm:
+        if sm.start() < vm.start():
+            signed_html = content[sm.end():vm.start()]
+            vetoed_html = content[vm.end():]
+        else:
+            vetoed_html = content[vm.end():sm.start()]
+            signed_html = content[sm.end():]
+    elif sm:
+        signed_html = content[sm.end():]
+    elif vm:
+        vetoed_html = content[vm.end():]
+    elif "veto" in title_clean.lower():
+        vetoed_html = content
+    else:
+        signed_html = content
 
     out = {}
     common = {
         "post_id": post.get("id"),
         "published_at": post.get("date_gmt") or post.get("date"),
         "modified_at": post.get("modified_gmt") or post.get("modified"),
-        "title": html_mod.unescape(title),
+        "title": title_clean,
     }
     for nid, measure, msg in parse_bill_items(signed_html):
         out[nid] = {**common, "action": "signed", "date": date, "url": url,
@@ -152,22 +243,43 @@ def main():
     ap.add_argument("--out", default="data/gov_actions.json")
     args = ap.parse_args()
 
-    after_iso = args.after + "T00:00:00"
-    print(f"Fetching gov.ca.gov 'legislative update' posts since {args.after} …")
-    posts = fetch_posts(after_iso)
-    print(f"  found {len(posts)} posts")
-
+    # Pre-populate with existing data if present so actions are preserved
+    # and enriched even if a single network fetch returns a partial set.
     actions = {}
+    if os.path.exists(args.out):
+        try:
+            with open(args.out, "r", encoding="utf-8") as f:
+                prev = json.load(f).get("actions", {})
+                if isinstance(prev, dict):
+                    actions.update(prev)
+                    print(f"Loaded {len(actions)} existing actions from {args.out}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Note: could not read existing {args.out}: {exc}")
+
+    after_iso = args.after + "T00:00:00"
+    print(f"Fetching gov.ca.gov announcements since {args.after} …")
+    posts = fetch_posts(after_iso)
+    print(f"  found {len(posts)} candidate posts")
+
     parsed_posts = 0
+    new_or_updated = 0
     for p in posts:
         parsed = parse_post(p)
         if parsed:
             parsed_posts += 1
         for k, v in parsed.items():
-            if k not in actions or v["date"] < actions[k]["date"]:
+            if k not in actions:
                 actions[k] = v
+                new_or_updated += 1
+            else:
+                # Update if new one has a message link and existing doesn't
+                if v.get("msg_url") and not actions[k].get("msg_url"):
+                    actions[k]["msg_url"] = v["msg_url"]
+                # Keep earliest announcement date
+                if v["date"] < actions[k]["date"]:
+                    actions[k] = v
 
-    print(f"  parsed {parsed_posts} update posts -> {len(actions)} bill actions")
+    print(f"  parsed {parsed_posts} announcement posts -> total {len(actions)} bill actions ({new_or_updated} new/updated)")
 
     signed = sum(1 for v in actions.values() if v["action"] == "signed")
     vetoed = sum(1 for v in actions.values() if v["action"] == "vetoed")

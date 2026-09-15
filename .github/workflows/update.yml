@@ -2,9 +2,20 @@ name: Refresh bill data
 
 on:
   schedule:
-    # ~6:17am Pacific daily (13:17 UTC). During the September signing window
-    # the Governor acts in batches, so a daily refresh keeps the site current.
-    - cron: "17 13 * * *"
+    # Strategic timing tailored to the California Governor's signing window
+    # and LegInfo update cycles (California Pacific Daylight Time / PDT is UTC-7):
+    #
+    # Peak drop window: Hourly from 1:17pm to 12:17am PT (20:17 to 07:17 UTC)
+    #   Batch signing and veto announcements historically drop between 4pm-9pm PT
+    #   (e.g., the 9/14 batch dropped at 8:02pm PT), with potential midnight drops
+    #   approaching the Sept 30 constitutional deadline. Hourly runs ensure drops are
+    #   caught within ~1 hour rather than waiting until the next morning.
+    #
+    # Morning / Midday checks: 6:17am, 8:17am, 10:17am, 12:17pm PT (13:17, 15:17, 17:17, 19:17 UTC)
+    #   Captures overnight LegInfo chaptering syncs and daytime announcements.
+    #
+    # Minute :17 avoids GitHub Actions top-of-hour scheduler queue backlogs.
+    - cron: "17 0,1,2,3,4,5,6,7,13,15,17,19,20,21,22,23 * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -45,5 +56,6 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: refresh bill data ($(date -u +%Y-%m-%d))"
+            git pull --rebase origin "${GITHUB_REF#refs/heads/}" || true
             git push
           fi
