@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+# Full official digests are transient input to the optional Gemini batch step.
+data/.bill_digest_cache.json
 venv/
 .DS_Store

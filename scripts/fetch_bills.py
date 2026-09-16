@@ -19,8 +19,10 @@ Usage:
 """
 
 import argparse
+import hashlib
 import html as html_mod
 import json
+import os
 import random
 import re
 import sys
@@ -32,6 +34,7 @@ from datetime import datetime, timezone
 import requests
 
 from enrichment import enrich_payload
+from plain_english import summarize_bill
 
 BASE = "https://leginfo.legislature.ca.gov/faces"
 SEARCH_PATH = "/billSearchClient.xhtml"
@@ -252,11 +255,14 @@ def fetch_one(bill):
     date, text = extract_action(summary, history, kind)
 
     summary_text = None
+    digest_text = None
     try:
         time.sleep(random.uniform(0.05, 0.15))  # be polite
-        summary_text = extract_summary(fetch_digest(bill_id), bill["title"])
+        digest_text = extract_digest_text(fetch_digest(bill_id), bill["title"])
+        summary_text = truncate(digest_text) if digest_text else None
     except Exception:  # noqa: BLE001 - summary is a nice-to-have
         summary_text = None
+        digest_text = None
 
     latest_vote = None
     try:
@@ -266,7 +272,8 @@ def fetch_one(bill):
         latest_vote = None
 
     return {**bill, "action_date": date, "action": text,
-            "summary": summary_text, "latest_vote": latest_vote, "error": None}
+            "summary": summary_text, "digest_text": digest_text,
+            "latest_vote": latest_vote, "error": None}
 
 
 # --------------------------------------------------------------------------
@@ -363,9 +370,8 @@ def parse_latest_vote(votes_html, bill_id=None):
     return max(votes, key=lambda v: v["date"]) if votes else None
 
 
-def extract_summary(digest_html, title):
-    """Pull the digest body (what the bill does) from the bill text page and
-    return a short, sentence-aware summary."""
+def extract_digest_text(digest_html, title):
+    """Pull the complete Legislative Counsel digest body as plain text."""
     text = html_mod.unescape(re.sub(r"<[^>]+>", " ", digest_html))
     text = re.sub(r"\s+", " ", text).strip()
     m = DIGEST_RE.search(text)
@@ -383,9 +389,18 @@ def extract_summary(digest_html, title):
         i = digest.lower().find(t.lower())
         if 0 <= i < 200:
             digest = digest[i + len(t):].lstrip(" .").strip()
-    if not digest:
-        return None
-    return truncate(digest)
+    return digest or None
+
+
+def extract_summary(digest_html, title):
+    """Pull a compact source excerpt for the existing list view.
+
+    The full digest is also retained transiently by ``fetch_one`` so the
+    deterministic plain-English pass can see the operative provisions even
+    when the compact excerpt ends during the background section.
+    """
+    digest = extract_digest_text(digest_html, title)
+    return truncate(digest) if digest else None
 
 
 # --------------------------------------------------------------------------
@@ -399,11 +414,31 @@ def main():
     ap.add_argument("--session", default="20252026")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="cap status-page fetches (testing)")
+    ap.add_argument(
+        "--ai-source",
+        default="",
+        help="write a transient full-digest cache for optional Gemini enrichment",
+    )
     ap.add_argument("--out", default="data/bills.json")
     args = ap.parse_args()
 
     global SESSION
     SESSION = args.session
+
+    # Preserve accepted offline/AI summaries across refreshes. The source hash
+    # below prevents an old explanation from surviving an amended digest.
+    previous = {}
+    if os.path.exists(args.out):
+        try:
+            with open(args.out, encoding="utf-8") as previous_file:
+                previous_payload = json.load(previous_file)
+            previous = {
+                str(item.get("bill_id")): item
+                for item in previous_payload.get("bills", [])
+                if item.get("bill_id")
+            }
+        except (OSError, ValueError, TypeError):
+            previous = {}
 
     log(f"Fetching bill list for session {SESSION} …")
     s = requests.Session()
@@ -466,7 +501,25 @@ def main():
         # Normalize "AB-302" -> "AB 302", keep "ABX1-2" style intact.
         if re.fullmatch(r"[A-Za-z]+-\d+", measure):
             measure = measure.replace("-", " ")
+        digest_text = r.get("digest_text") or ""
+        digest_hash = (
+            hashlib.sha256(
+                re.sub(r"\s+", " ", digest_text).strip().encode("utf-8")
+            ).hexdigest()
+            if digest_text else None
+        )
+        explanation = summarize_bill(r["title"], digest_text or r.get("summary"))
+        old = previous.get(str(bid), {})
+        # Keep a previously accepted Gemini explanation only when it was based
+        # on exactly this digest. The optional batch step can then process only
+        # new, changed, or still-unenriched bills.
+        old_is_current_ai = (
+            str(old.get("plain_summary_method", "")).startswith("gemini-")
+            and digest_hash
+            and old.get("plain_summary_source_hash") == digest_hash
+        )
         out_bills.append({
+            "bill_id": bid,
             "measure": measure,
             "title": r["title"],
             "author": r["author"],
@@ -475,6 +528,14 @@ def main():
             "action_date": r.get("action_date"),
             "action": r.get("action"),
             "summary": r.get("summary"),
+            "plain_summary": old.get("plain_summary") if old_is_current_ai else explanation["text"],
+            "plain_summary_confidence": old.get("plain_summary_confidence") if old_is_current_ai else explanation["confidence"],
+            "plain_summary_flags": old.get("plain_summary_flags") if old_is_current_ai else explanation["flags"],
+            "plain_summary_method": old.get("plain_summary_method") if old_is_current_ai else explanation["method"],
+            "plain_summary_model": old.get("plain_summary_model") if old_is_current_ai else None,
+            "plain_summary_source_hash": digest_hash,
+            "plain_summary_evidence": old.get("plain_summary_evidence") if old_is_current_ai else None,
+            "plain_summary_generated_at": old.get("plain_summary_generated_at") if old_is_current_ai else None,
             "latest_vote": r.get("latest_vote"),
             "dd_url": f"{DD_BASE}/{slug(bid)}",
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",
@@ -498,6 +559,37 @@ def main():
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+
+    if args.ai_source:
+        # This file contains full official digests only for the duration of the
+        # refresh job. It is ignored and is never embedded in index.html.
+        os.makedirs(os.path.dirname(args.ai_source) or ".", exist_ok=True)
+        ai_sources = []
+        for r in records:
+            digest_text = r.get("digest_text") or ""
+            if not digest_text:
+                continue
+            raw_measure = r["measure"]
+            normalized_measure = (
+                raw_measure.replace("-", " ")
+                if re.fullmatch(r"[A-Za-z]+-\d+", raw_measure)
+                else raw_measure
+            )
+            ai_sources.append({
+                "bill_id": r["bill_id"],
+                "measure": normalized_measure,
+                "title": r["title"],
+                "digest_text": digest_text,
+                "source_hash": hashlib.sha256(
+                    re.sub(r"\s+", " ", digest_text).strip().encode("utf-8")
+                ).hexdigest(),
+            })
+        with open(args.ai_source, "w", encoding="utf-8") as f:
+            json.dump(
+                {"generated_at": payload["generated_at"], "bills": ai_sources},
+                f, ensure_ascii=False, separators=(",", ":")
+            )
+        log(f"  wrote transient AI source cache for {len(ai_sources)} bills")
 
     log(f"DONE — wrote {len(out_bills)} bills to {args.out}")
     log(f"  signed={counts.get('signed', 0)} vetoed={counts.get('vetoed', 0)} "

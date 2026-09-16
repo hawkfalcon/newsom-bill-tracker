@@ -11,6 +11,11 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from plain_english import summarize_bill
+except ImportError:  # Allows importing this module from the repository root in tests.
+    from scripts.plain_english import summarize_bill
+
 
 ROOT = Path(__file__).resolve().parent.parent
 LEGISLATORS_PATH = ROOT / "data" / "legislators.json"
@@ -175,12 +180,27 @@ def classify_topics(title, summary=None):
 
 
 def enrich_bill(bill, authors=None):
-    """Add stable topic and author fields without changing source fields."""
+    """Add stable topic, author, and plain-English fields.
+
+    The plain-English text is intentionally generated from the official digest
+    already present in the payload.  It never replaces that source text.
+    """
     authors = AUTHORS if authors is None else authors
     author = bill.get("author") or ""
     info = authors.get(author)
     bill["topics"] = classify_topics(bill.get("title"), bill.get("summary"))
     bill["author_info"] = dict(info) if info else None
+
+    if not bill.get("plain_summary"):
+        explanation = summarize_bill(bill.get("title"), bill.get("summary"))
+        bill["plain_summary"] = explanation["text"]
+        bill["plain_summary_confidence"] = explanation["confidence"]
+        bill["plain_summary_flags"] = explanation["flags"]
+        bill["plain_summary_method"] = explanation["method"]
+    else:
+        bill.setdefault("plain_summary_confidence", "medium")
+        bill.setdefault("plain_summary_flags", [])
+        bill.setdefault("plain_summary_method", "rules-v1")
     return bill
 
 

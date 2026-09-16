@@ -39,7 +39,15 @@ jobs:
         run: pip install requests
 
       - name: Fetch bills from LegInfo
-        run: python scripts/fetch_bills.py --out data/bills.json
+        run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json
+
+      - name: Enrich explanations with Gemini (optional offline batch)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # These can be overridden without changing the code. The script
+          # rotates batches across models and falls back if one is unavailable.
+          GEMINI_MODELS: gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash-lite
+        run: python scripts/gemini_enrichment.py --data data/bills.json --source data/.bill_digest_cache.json
 
       - name: Fetch Governor's office announcements
         run: python scripts/fetch_gov_updates.py --out data/gov_actions.json

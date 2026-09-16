@@ -30,8 +30,10 @@ const DEF_WAVE = "2026";
 const DEF_SET = ["signed", "vetoed"];
 const defCount = cnt(DEF_WAVE, "signed") + cnt(DEF_WAVE, "vetoed");
 const pendAll = cnt("all", "pending");
+const pend2026 = cnt(DEF_WAVE, "pending");
 const veto2025 = cnt("2025", "vetoed");
 const veto2026 = cnt(DEF_WAVE, "vetoed");
+const vetoAll = bills.filter(b => b.status === "vetoed").length;
 
 // ---------- minimal DOM stubs ----------
 let failures = 0;
@@ -196,7 +198,7 @@ console.log("D: toggling statuses updates list + URL");
   e.els["stat-pend"].click();                       // pending on
   check(e.history.calls.at(-1) === "?status=vetoed,pending",
         `URL canonical order vetoed,pending (got ${e.history.calls.at(-1)})`);
-  check(rows(e.els.list) === veto2026 + pendAll, "vetoed+pending count adds up");
+  check(rows(e.els.list) === veto2026 + pend2026, "vetoed+pending count adds up");
 
   e.els["stat-veto"].click();                       // vetoed off
   check(e.history.calls.at(-1) === "?status=pending", `URL ?status=pending (got ${e.history.calls.at(-1)})`);
@@ -243,7 +245,7 @@ console.log("G: popstate re-reads filter state from URL");
   check(pressed(e.els["stat-veto"]) && !pressed(e.els["stat-sign"]) && !pressed(e.els["stat-pend"]),
         "popstate applies ?status=vetoed");
   check(e.waveButtons[2].classList.contains("on"), "popstate applies ?wave=all");
-  check(rows(e.els.list) === veto2025 + veto2026, "all vetoes listed across waves");
+  check(rows(e.els.list) === vetoAll, "all vetoes listed across waves");
 }
 
 // ---------- scenario H: invalid params fall back to defaults ----------
