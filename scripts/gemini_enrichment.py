@@ -311,7 +311,15 @@ def needs_enrichment(bill, digest_hash):
     validation failure.
     """
     if bill.get("plain_summary_enrichment_hash") == digest_hash:
-        return False
+        status = bill.get("plain_summary_enrichment_status")
+        try:
+            attempts = int(bill.get("plain_summary_enrichment_attempts", 0))
+        except (TypeError, ValueError):
+            attempts = 0
+        # The first successful run left some deterministic fallbacks without a
+        # per-bill result. They get one corrective attempt, then are cached just
+        # like accepted/rejected responses.
+        return status == "retry_pending" and attempts < 2
     if (
         str(bill.get("plain_summary_method", "")).startswith(METHOD_PREFIX)
         and bill.get("plain_summary_source_hash") == digest_hash
@@ -398,6 +406,21 @@ def main():
     failed_batches = 0
 
     for batch_index, batch in enumerate(batches):
+        expected = {item["bill_id"]: item for item in batch}
+        # Count this request before making it. This gives each unchanged digest
+        # at most one corrective retry, even if the provider returns an error.
+        for original in expected.values():
+            bill = by_id.get(original["bill_id"])
+            if not bill:
+                continue
+            try:
+                attempts = int(bill.get("plain_summary_enrichment_attempts", 0))
+            except (TypeError, ValueError):
+                attempts = 0
+            bill["plain_summary_enrichment_hash"] = original["source_hash"]
+            bill["plain_summary_enrichment_attempts"] = attempts + 1
+            bill["plain_summary_enrichment_status"] = "pending"
+
         prompt = build_prompt(batch)
         # Rotate across free models.  If a model is unavailable or rate-limited,
         # try another configured model before falling back to the rules result.
@@ -425,17 +448,22 @@ def main():
 
         if response is None:
             failed_batches += 1
+            for original in expected.values():
+                bill = by_id.get(original["bill_id"])
+                if bill:
+                    bill["plain_summary_enrichment_status"] = "request_failed"
             print(f"  batch {batch_index + 1}/{len(batches)} failed; keeping fallback: {last_error}", flush=True)
             continue
 
-        expected = {item["bill_id"]: item for item in batch}
         accepted_in_batch = 0
+        seen_ids = set()
         for item in response:
             bill_id = str(item.get("bill_id", "")).strip() if isinstance(item, dict) else ""
             original = expected.get(bill_id)
             if not original:
                 rejected += 1
                 continue
+            seen_ids.add(bill_id)
             checked = validate_item(item, original, original["digest_text"])
             bill = by_id.get(bill_id)
             if not bill:
@@ -461,6 +489,15 @@ def main():
             bill["plain_summary_generated_at"] = now_iso()
             accepted_in_batch += 1
             successful += 1
+
+        # A syntactically valid response can still omit some requested IDs.
+        # Cache those omissions as a failed attempt rather than sending them
+        # indefinitely on future refreshes.
+        for bill_id, original in expected.items():
+            if bill_id not in seen_ids:
+                bill = by_id.get(bill_id)
+                if bill:
+                    bill["plain_summary_enrichment_status"] = "no_response"
         print(f"  batch {batch_index + 1}/{len(batches)}: {accepted_in_batch}/{len(batch)} accepted via {used_model}", flush=True)
 
     payload["plain_summary_method"] = "Optional Gemini batch enrichment with deterministic fallback"

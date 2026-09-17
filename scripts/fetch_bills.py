@@ -540,6 +540,7 @@ def main():
             "plain_summary_generated_at": old.get("plain_summary_generated_at") if old_is_current_ai else None,
             "plain_summary_enrichment_hash": old.get("plain_summary_enrichment_hash") if old_digest_is_current else None,
             "plain_summary_enrichment_status": old.get("plain_summary_enrichment_status") if old_digest_is_current else None,
+            "plain_summary_enrichment_attempts": old.get("plain_summary_enrichment_attempts") if old_digest_is_current else None,
             "latest_vote": r.get("latest_vote"),
             "dd_url": f"{DD_BASE}/{slug(bid)}",
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",
