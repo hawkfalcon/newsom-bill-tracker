@@ -21,8 +21,10 @@ on:
 permissions:
   contents: write
 
+# Keep a manual enrichment run on the feature branch from being cancelled by
+# the separately scheduled refresh on master.
 concurrency:
-  group: refresh
+  group: refresh-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
