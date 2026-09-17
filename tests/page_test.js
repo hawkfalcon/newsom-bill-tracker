@@ -125,7 +125,7 @@ function runPage(search) {
   return env;
 }
 
-const rows = el => (el.innerHTML.match(/<div class="row">/g) || []).length;
+const rows = el => (el.innerHTML.match(/<div class="row(?: [^"]*)?">/g) || []).length;
 const pressed = el => el.getAttribute("aria-pressed") === "true";
 
 // ---------- scenario A: fresh load, no params ----------
@@ -142,9 +142,8 @@ console.log("A: default load (no URL params)");
   check(e.els.list.innerHTML.includes("class=\"author-link\"") &&
         e.els.list.innerHTML.includes("https://calmatters.digitaldemocracy.org/bills#author="),
         "author labels link to Digital Democracy author filters");
-  check(e.els.list.innerHTML.includes('class="row signed"') &&
-        e.els.list.innerHTML.includes('class="row vetoed"'),
-        "bill rows carry signed/vetoed outline classes");
+  check(e.els.list.innerHTML.includes('class="row signed"'),
+        "signed bill rows carry the signed outline class");
   check(e.history.calls.length === 0, "URL stays clean on default load");
 }
 
@@ -249,6 +248,8 @@ console.log("G: popstate re-reads filter state from URL");
         "popstate applies ?status=vetoed");
   check(e.waveButtons[2].classList.contains("on"), "popstate applies ?wave=all");
   check(rows(e.els.list) === vetoAll, "all vetoes listed across waves");
+  check(e.els.list.innerHTML.includes('class="row vetoed"'),
+        "vetoed bill rows carry the vetoed outline class");
 }
 
 // ---------- scenario H: invalid params fall back to defaults ----------
