@@ -6,6 +6,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 from gemini_enrichment import (
     build_prompt,
+    is_omnibus,
     make_batches,
     needs_enrichment,
     prepare_digest_for_model,
@@ -78,6 +79,22 @@ class GeminiEnrichmentTests(unittest.TestCase):
 
     def test_hash_is_stable_for_whitespace(self):
         self.assertEqual(source_hash("A  bill\nwould require a report."), source_hash("A bill would require a report."))
+
+    def test_omnibus_gets_multi_provision_context_and_refresh(self):
+        self.assertTrue(is_omnibus("Transportation: omnibus bill."))
+        digest = " ".join(
+            f"This bill would authorize program change number {i}."
+            for i in range(1, 18)
+        )
+        ordinary = prepare_digest_for_model("Transportation.", digest)
+        omnibus = prepare_digest_for_model("Transportation: omnibus bill.", digest)
+        self.assertGreater(len(omnibus), len(ordinary))
+        digest_hash = source_hash(digest)
+        self.assertTrue(needs_enrichment({
+            "title": "Transportation: omnibus bill.",
+            "plain_summary_method": "gemini-gemini-3.5-flash-lite",
+            "plain_summary_source_hash": digest_hash,
+        }, digest_hash))
 
     def test_unchanged_digest_is_not_sent_again_after_accept_or_rejection(self):
         digest_hash = source_hash("This bill would require a report.")

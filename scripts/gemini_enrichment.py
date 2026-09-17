@@ -33,6 +33,7 @@ DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_INPUT_CHARS = 90000
 DEFAULT_MAX_OUTPUT_TOKENS = 7000
 METHOD_PREFIX = "gemini-"
+OMNIBUS_ENRICHMENT_VERSION = "omnibus-v2"
 
 # These are intentionally broad.  They select operative provisions, conditions,
 # exceptions, dates, money, penalties, and implementation details without
@@ -68,19 +69,28 @@ def source_hash(text):
     return hashlib.sha256(clean_text(text).encode("utf-8")).hexdigest()
 
 
+def is_omnibus(title):
+    return bool(re.search(r"\bomnibus\b", clean_text(title), re.I))
+
+
 def prepare_digest_for_model(title, digest, max_chars=8500):
     """Select a compact, source-faithful context for one bill.
 
     The full digest can contain long descriptions of existing law and repeated
-    code citations.  Retain a little context, prioritize the operative clauses,
-    and retain sentences containing exceptions or numbers.  The model still
-    receives verbatim official sentences; it is not given a lossy paraphrase.
+    code citations. Retain a little context, prioritize the operative clauses,
+    and retain sentences containing exceptions or numbers. Omnibus bills get a
+    larger context window because collapsing a multi-provision bill into the
+    first one or two changes is misleading. The model still receives verbatim
+    official sentences; it is not given a lossy paraphrase.
     """
     title = clean_text(title)
     raw = clean_text(digest)
     if not raw:
         return ""
 
+    omnibus = is_omnibus(title)
+    sentence_limit = 20 if omnibus else 12
+    effective_max_chars = max(max_chars, 14000) if omnibus else max_chars
     parts = sentences(raw)
     if not parts:
         return raw[:max_chars]
@@ -105,12 +115,18 @@ def prepare_digest_for_model(title, digest, max_chars=8500):
             score += 3
         scored.append((score, index, sentence))
 
-    # Always include operative sentences.  For a background-only excerpt, the
+    # Prefer operative sentences. For a background-only excerpt, the
     # highest-scoring opening sentences are more honest than an invented change.
-    selected = {index for score, index, sentence in scored if ACTION_RE.search(sentence)}
+    # Cap even the operative set: an ordinary bill should not crowd the whole
+    # batch context with every repeated amendment clause.
     ranked = sorted(scored, key=lambda item: (-item[0], item[1]))
+    action_ranked = sorted(
+        [item for item in scored if ACTION_RE.search(item[2])],
+        key=lambda item: (-item[0], item[1]),
+    )
+    selected = {index for score, index, sentence in action_ranked[:sentence_limit]}
     for score, index, sentence in ranked:
-        if len(selected) >= 12:
+        if len(selected) >= sentence_limit:
             break
         if score <= 0:
             continue
@@ -128,7 +144,7 @@ def prepare_digest_for_model(title, digest, max_chars=8500):
     used = 0
     for sentence in ordered:
         addition = sentence if not packed else " " + sentence
-        if used + len(addition) <= max_chars:
+        if used + len(addition) <= effective_max_chars:
             packed.append(sentence)
             used += len(addition)
     if not packed:
@@ -143,6 +159,7 @@ def build_prompt(batch):
             "bill_id": item["bill_id"],
             "measure": item["measure"],
             "title": item["title"],
+            "multi_provision_bill": is_omnibus(item["title"]),
             "official_digest_sentences": item["prepared_digest"],
         })
     source = json.dumps(records, ensure_ascii=False, separators=(",", ":"))
@@ -151,8 +168,8 @@ def build_prompt(batch):
 Return exactly one JSON object for every bill_id. Return a JSON array only, with no markdown and no commentary. Do not omit a bill. Use only the supplied official digest sentences; do not use outside knowledge and do not infer political intent, costs, winners, losers, or practical effects that are not stated.
 
 For each bill:
-- plain_summary: one or two clear sentences, maximum 65 words. Say what the bill changes and, when stated, who or what it applies to. Prefer a concrete verb such as requires, allows, prohibits, creates, changes, or exempts. Preserve dates, dollar amounts, percentages, thresholds, agencies, deadlines, and exceptions accurately.
-- evidence: one or two short exact quotes copied from the supplied digest sentences that support the summary. Quotes must be verbatim and together no longer than 280 characters.
+- plain_summary: for an ordinary bill, one or two clear sentences, maximum 65 words. For a bill marked multi_provision_bill, use up to three sentences and 120 words: say that it contains multiple changes and name the most important distinct provisions rather than summarizing only the first one. Say who or what each change applies to when stated. Prefer concrete verbs such as requires, allows, prohibits, creates, changes, or exempts. Preserve dates, dollar amounts, percentages, thresholds, agencies, deadlines, and exceptions accurately.
+- evidence: one to three short exact quotes copied from the supplied digest sentences that support the summary. Quotes must be verbatim and together no longer than 420 characters.
 - confidence: high only when the supplied sentences clearly state the operative change; otherwise medium or low.
 
 If the supplied sentences do not state a clear change, say that the digest excerpt does not provide enough detail rather than writing a generic claim such as \"updates California rules.\"
@@ -242,7 +259,8 @@ def validate_item(item, expected, source_text):
     if bill_id != expected["bill_id"]:
         return None
     summary = clean_text(item.get("plain_summary"))
-    if not summary or len(summary) < 35 or len(summary) > 700:
+    summary_limit = 1100 if is_omnibus(expected.get("title")) else 700
+    if not summary or len(summary) < 35 or len(summary) > summary_limit:
         return None
     if re.search(r"\b(?:updates? California rules|makes several changes involving)\b", summary, re.I):
         return None
@@ -251,7 +269,8 @@ def validate_item(item, expected, source_text):
     if not isinstance(evidence, list):
         return None
     evidence = [clean_text(value) for value in evidence if clean_text(value)]
-    if not evidence or len(" ".join(evidence)) > 280:
+    evidence_limit = 420 if is_omnibus(expected.get("title")) else 280
+    if not evidence or len(" ".join(evidence)) > evidence_limit:
         return None
     normalized_source = normalized(source_text)
     valid_evidence = [quote for quote in evidence if len(normalized(quote)) >= 12 and normalized(quote) in normalized_source]
@@ -308,8 +327,11 @@ def needs_enrichment(bill, digest_hash):
     Successful AI results use the method/source pair from the first version of
     this script. Newer runs also record an enrichment hash when a response was
     received but rejected, so a stable digest is not sent repeatedly after a
-    validation failure.
+    validation failure. Omnibus bills are reprocessed once under the expanded
+    multi-provision prompt.
     """
+    if is_omnibus(bill.get("title")) and bill.get("plain_summary_enrichment_version") != OMNIBUS_ENRICHMENT_VERSION:
+        return True
     if bill.get("plain_summary_enrichment_hash") == digest_hash:
         status = bill.get("plain_summary_enrichment_status")
         try:
@@ -421,6 +443,8 @@ def main():
             bill["plain_summary_enrichment_hash"] = original["source_hash"]
             bill["plain_summary_enrichment_attempts"] = attempts + 1
             bill["plain_summary_enrichment_status"] = "pending"
+            if is_omnibus(original["title"]):
+                bill["plain_summary_enrichment_version"] = OMNIBUS_ENRICHMENT_VERSION
 
         prompt = build_prompt(batch)
         # Rotate across free models.  If a model is unavailable or rate-limited,

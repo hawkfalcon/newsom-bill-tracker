@@ -65,8 +65,10 @@ only as the rich-detail page each bill links out to.
    pass. It first reduces each full official digest to the operative sentences,
    exceptions, dates, thresholds, and implementation details most useful for
    a reader. It then sends up to 20 bills per request, rotates across the
-   configured Gemini models, requires source evidence in the response, and
-   leaves the deterministic result in place when a response fails validation.
+   configured Gemini models, and gives bills labeled “omnibus” a larger
+   context window plus an explicit multi-provision summary instruction. It
+   requires source evidence in the response and leaves the deterministic
+   result in place when a response fails validation.
    Accepted and rejected attempts are recorded by official-digest hash, so an
    unchanged bill is not sent repeatedly on later refreshes. A fallback from
    the first batch receives one corrective attempt; use `--force` only after
