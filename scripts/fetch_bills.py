@@ -404,6 +404,43 @@ def extract_summary(digest_html, title):
 
 
 # --------------------------------------------------------------------------
+# Incremental cache helpers
+# --------------------------------------------------------------------------
+FINAL_KINDS = {"signed", "vetoed"}
+
+
+def normalize_measure(measure):
+    measure = measure or ""
+    return measure.replace("-", " ") if re.fullmatch(r"[A-Za-z]+-\\d+", measure) else measure
+
+
+def search_fingerprint(bill):
+    """Fields in the LegInfo search result that identify a bill's current row."""
+    return json.dumps(
+        {
+            "bill_id": bill.get("bill_id"),
+            "measure": normalize_measure(bill.get("measure")),
+            "title": bill.get("title"),
+            "author": bill.get("author"),
+            "status": bill.get("status"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def can_reuse_final(bill, cached):
+    """Only reuse terminal records with a matching row and full digest cache."""
+    return (
+        classify(bill.get("status")) in FINAL_KINDS
+        and cached.get("fingerprint") == search_fingerprint(bill)
+        and bool(cached.get("digest_text"))
+        and isinstance(cached.get("record"), dict)
+    )
+
+
+# --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 SESSION = "20252026"
@@ -418,6 +455,11 @@ def main():
         "--ai-source",
         default="",
         help="write a transient full-digest cache for optional Gemini enrichment",
+    )
+    ap.add_argument(
+        "--cache",
+        default="data/leginfo_cache.json",
+        help="persist fetched final-bill records and full digests for incremental refreshes",
     )
     ap.add_argument("--out", default="data/bills.json")
     args = ap.parse_args()
@@ -439,6 +481,15 @@ def main():
             }
         except (OSError, ValueError, TypeError):
             previous = {}
+
+    cache_bills = {}
+    if os.path.exists(args.cache):
+        try:
+            with open(args.cache, encoding="utf-8") as cache_file:
+                cache_payload = json.load(cache_file)
+            cache_bills = cache_payload.get("bills", {})
+        except (OSError, ValueError, TypeError):
+            cache_bills = {}
 
     log(f"Fetching bill list for session {SESSION} …")
     s = requests.Session()
@@ -466,13 +517,40 @@ def main():
             "avoid writing incomplete data.")
         sys.exit(1)
 
-    targets = [b for b in bills if classify(b["status"]) is not None]
-    log(f"  {len(targets)} bills reached the Governor "
-        f"(signed / vetoed / enrolled) — fetching action details …")
+    targets = []
+    reused = {}
+    for bill in bills:
+        kind = classify(bill["status"])
+        if kind is None:
+            continue
+        bid = str(bill["bill_id"])
+        cached = cache_bills.get(bid, {})
+        cached_record = cached.get("record")
+        # A signed or vetoed bill is terminal for this tracker. Once its search
+        # row and full digest are cached, reusing it cannot hide a pending-to-
+        # final transition (pending bills are always fetched below).
+        if can_reuse_final(bill, cached):
+            record = dict(cached_record)
+            record.update({
+                "bill_id": bid,
+                "measure": normalize_measure(bill["measure"]),
+                "title": bill["title"],
+                "author": bill["author"],
+                "status": kind,
+                "status_label": STATUS_LABELS[kind],
+            })
+            reused[bid] = record
+        else:
+            targets.append(bill)
+
+    governor_count = sum(1 for bill in bills if classify(bill["status"]) is not None)
+    log(f"  {governor_count} bills reached the Governor "
+        f"(signed / vetoed / enrolled); reusing {len(reused)} unchanged final records "
+        f"and fetching {len(targets)} bills …")
 
     if args.limit:
         targets = targets[: args.limit]
-        log(f"  (limited to {args.limit} for testing)")
+        log(f"  (limited to {args.limit} for testing; cached final records remain available)")
 
     records = []
     done = 0
@@ -547,6 +625,11 @@ def main():
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",
         })
 
+    # Cached final records were not in the thread-pool result list, but they
+    # remain part of the complete static snapshot.
+    out_bills.extend(reused.values())
+    out_bills.sort(key=lambda bill: (bill.get("action_date") or "", bill.get("measure", "")), reverse=True)
+
     counts = {}
     for b in out_bills:
         counts[b["status"]] = counts.get(b["status"], 0) + 1
@@ -561,29 +644,53 @@ def main():
     }
     enrich_payload(payload)
 
+    # Persist the complete digest outside the public payload so a later run can
+    # reuse final bills and still provide full source context to the optional
+    # Gemini step without querying LegInfo again.
+    out_by_id = {str(bill.get("bill_id")): bill for bill in out_bills}
+    fetched_by_id = {str(record.get("bill_id")): record for record in records}
+    cache_entries = {}
+    for bill in bills:
+        bid = str(bill["bill_id"])
+        output_record = out_by_id.get(bid)
+        if not output_record:
+            continue
+        if bid in fetched_by_id:
+            digest_text = fetched_by_id[bid].get("digest_text") or ""
+        else:
+            digest_text = cache_bills.get(bid, {}).get("digest_text") or ""
+        cache_entries[bid] = {
+            "fingerprint": search_fingerprint(bill),
+            "digest_text": digest_text,
+            "record": output_record,
+        }
+
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+
+    os.makedirs(os.path.dirname(args.cache) or ".", exist_ok=True)
+    with open(args.cache, "w", encoding="utf-8") as f:
+        json.dump(
+            {"version": 1, "session": SESSION, "bills": cache_entries},
+            f, ensure_ascii=False, separators=(",", ":")
+        )
+    log(f"  wrote LegInfo cache for {len(cache_entries)} bills")
 
     if args.ai_source:
         # This file contains full official digests only for the duration of the
         # refresh job. It is ignored and is never embedded in index.html.
         os.makedirs(os.path.dirname(args.ai_source) or ".", exist_ok=True)
         ai_sources = []
-        for r in records:
-            digest_text = r.get("digest_text") or ""
+        for bid, cached in cache_entries.items():
+            digest_text = cached.get("digest_text") or ""
             if not digest_text:
                 continue
-            raw_measure = r["measure"]
-            normalized_measure = (
-                raw_measure.replace("-", " ")
-                if re.fullmatch(r"[A-Za-z]+-\d+", raw_measure)
-                else raw_measure
-            )
+            record = cached["record"]
             ai_sources.append({
-                "bill_id": r["bill_id"],
-                "measure": normalized_measure,
-                "title": r["title"],
+                "bill_id": bid,
+                "measure": record.get("measure", ""),
+                "title": record.get("title", ""),
                 "digest_text": digest_text,
                 "source_hash": hashlib.sha256(
                     re.sub(r"\s+", " ", digest_text).strip().encode("utf-8")
