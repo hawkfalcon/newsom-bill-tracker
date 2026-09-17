@@ -28,7 +28,7 @@ from urllib import request as url_request
 
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_MODELS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash-lite"
+DEFAULT_MODELS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.1-flash-lite,gemini-3.5-flash-lite"
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_INPUT_CHARS = 90000
 DEFAULT_MAX_OUTPUT_TOKENS = 7000
@@ -472,7 +472,9 @@ def main():
         response = None
         used_model = None
         last_error = None
+        attempted_models = []
         for model in ordered_models:
+            attempted_models.append(model)
             for attempt in range(2):
                 try:
                     response = call_gemini(api_key, model, prompt)
@@ -496,7 +498,11 @@ def main():
                 bill = by_id.get(original["bill_id"])
                 if bill:
                     bill["plain_summary_enrichment_status"] = "request_failed"
-            print(f"  batch {batch_index + 1}/{len(batches)} failed; keeping fallback: {last_error}", flush=True)
+            print(
+                f"  batch {batch_index + 1}/{len(batches)} failed; keeping fallback "
+                f"after models={','.join(attempted_models)}: {last_error}",
+                flush=True,
+            )
             continue
 
         accepted_in_batch = 0
@@ -542,7 +548,14 @@ def main():
                 bill = by_id.get(bill_id)
                 if bill:
                     bill["plain_summary_enrichment_status"] = "no_response"
-        print(f"  batch {batch_index + 1}/{len(batches)}: {accepted_in_batch}/{len(batch)} accepted via {used_model}", flush=True)
+        fallback_note = ""
+        if attempted_models and used_model != attempted_models[0]:
+            fallback_note = f" (fallback after {','.join(attempted_models[:-1])})"
+        print(
+            f"  batch {batch_index + 1}/{len(batches)}: {accepted_in_batch}/{len(batch)} "
+            f"accepted via {used_model}{fallback_note}",
+            flush=True,
+        )
 
     payload["plain_summary_method"] = "Optional Gemini batch enrichment with deterministic fallback"
     payload["plain_summary_generated_at"] = now_iso() if successful else payload.get("plain_summary_generated_at")
