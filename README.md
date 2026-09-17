@@ -34,7 +34,8 @@ as an outbound rich-detail link.
    with unchanged LegInfo search rows and cached full digests are reused on
    later refreshes, while enrolled bills are still checked for action changes.
    With `--ai-source`, it writes a transient Gemini input cache from those
-   cached or freshly fetched digests. Outputs `data/bills.json`.
+   cached or freshly fetched digests. Use `--refresh-all` when you explicitly
+   want to recheck every bill despite the cache. Outputs `data/bills.json`.
 
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official
    "legislative update" posts from gov.ca.gov's WordPress API and extracts the

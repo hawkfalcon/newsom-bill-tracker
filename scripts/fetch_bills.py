@@ -452,6 +452,11 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="cap status-page fetches (testing)")
     ap.add_argument(
+        "--refresh-all",
+        action="store_true",
+        help="ignore the incremental cache and refetch every tracked bill",
+    )
+    ap.add_argument(
         "--ai-source",
         default="",
         help="write a transient full-digest cache for optional Gemini enrichment",
@@ -529,7 +534,7 @@ def main():
         # A signed or vetoed bill is terminal for this tracker. Once its search
         # row and full digest are cached, reusing it cannot hide a pending-to-
         # final transition (pending bills are always fetched below).
-        if can_reuse_final(bill, cached):
+        if not args.refresh_all and can_reuse_final(bill, cached):
             record = dict(cached_record)
             record.update({
                 "bill_id": bid,
