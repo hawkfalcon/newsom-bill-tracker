@@ -77,6 +77,19 @@ class GeminiEnrichmentTests(unittest.TestCase):
         )
         self.assertIsNone(rejected)
 
+    def test_validation_accepts_equivalent_date_formatting(self):
+        result = validate_item(
+            {
+                "bill_id": "202520260AB1",
+                "plain_summary": "Requires reports by January 1, 2027.",
+                "evidence": ["require reports by 01/01/27"],
+                "confidence": "high",
+            },
+            {"bill_id": "202520260AB1", "title": "Reporting"},
+            "This bill would require reports by 01/01/27.",
+        )
+        self.assertIsNotNone(result)
+
     def test_hash_is_stable_for_whitespace(self):
         self.assertEqual(source_hash("A  bill\nwould require a report."), source_hash("A bill would require a report."))
 

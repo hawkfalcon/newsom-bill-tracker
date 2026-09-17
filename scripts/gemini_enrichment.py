@@ -251,39 +251,59 @@ def normalized(value):
     return re.sub(r"\s+", " ", clean_text(value)).strip().casefold()
 
 
-def validate_item(item, expected, source_text):
+def _number_supported(number, source_text):
+    """Compare numeric facts without rejecting harmless date formatting changes."""
+    compact_number = re.sub(r"[^0-9]", "", number)
+    if not compact_number:
+        return True
+    for source_token in re.findall(r"\b\d[\d,.%/-]*\b", source_text):
+        compact_source = re.sub(r"[^0-9]", "", source_token)
+        if compact_number == compact_source:
+            return True
+        # LegInfo may write 01/01/27 while the model writes January 1, 2027.
+        if len(compact_number) == 4 and compact_number.startswith("20") and compact_number[2:] in compact_source:
+            return True
+        if len(compact_number) <= 2 and compact_number in compact_source:
+            return True
+    return False
+
+
+def validate_item(item, expected, source_text, rejection_reasons=None):
     """Return a safe result or None; never trust unsupported model prose."""
-    if not isinstance(item, dict):
+    def reject(reason):
+        if rejection_reasons is not None:
+            rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
         return None
+
+    if not isinstance(item, dict):
+        return reject("not_an_object")
     bill_id = str(item.get("bill_id", "")).strip()
     if bill_id != expected["bill_id"]:
-        return None
+        return reject("wrong_bill_id")
     summary = clean_text(item.get("plain_summary"))
     summary_limit = 1100 if is_omnibus(expected.get("title")) else 700
     if not summary or len(summary) < 35 or len(summary) > summary_limit:
-        return None
+        return reject("summary_length")
     if re.search(r"\b(?:updates? California rules|makes several changes involving)\b", summary, re.I):
-        return None
+        return reject("generic_summary")
 
     evidence = item.get("evidence")
     if not isinstance(evidence, list):
-        return None
+        return reject("evidence_not_array")
     evidence = [clean_text(value) for value in evidence if clean_text(value)]
     evidence_limit = 420 if is_omnibus(expected.get("title")) else 280
     if not evidence or len(" ".join(evidence)) > evidence_limit:
-        return None
+        return reject("evidence_length")
     normalized_source = normalized(source_text)
     valid_evidence = [quote for quote in evidence if len(normalized(quote)) >= 12 and normalized(quote) in normalized_source]
     if not valid_evidence:
-        return None
+        return reject("evidence_not_verbatim")
 
-    # A model must not introduce new numeric facts.  The official quote check
-    # catches most errors; this explicit check protects dates and thresholds in
-    # the prose itself.
-    source_numbers = set(re.findall(r"\b\d[\d,.%/-]*\b", source_text))
+    # A model must not introduce new numeric facts. The comparison tolerates
+    # harmless formatting differences such as 01/01/27 versus January 1, 2027.
     for number in re.findall(r"\b\d[\d,.%/-]*\b", summary):
-        if number not in source_numbers:
-            return None
+        if not _number_supported(number, source_text):
+            return reject("unsupported_number")
 
     confidence = str(item.get("confidence", "medium")).lower()
     if confidence not in {"high", "medium", "low"}:
@@ -383,6 +403,7 @@ def main():
     ap.add_argument("--batch-size", type=int, default=int(os.environ.get("GEMINI_BATCH_SIZE", DEFAULT_BATCH_SIZE)))
     ap.add_argument("--max-input-chars", type=int, default=int(os.environ.get("GEMINI_MAX_INPUT_CHARS", DEFAULT_MAX_INPUT_CHARS)))
     ap.add_argument("--max-bills", type=int, default=0, help="testing cap; 0 means all eligible bills")
+    ap.add_argument("--force", action="store_true", help="reprocess unchanged digests after changing the prompt or model")
     ap.add_argument("--dry-run", action="store_true", help="show the planned batches without calling Gemini")
     args = ap.parse_args()
 
@@ -402,10 +423,7 @@ def main():
         if not item:
             continue
         digest_hash = item["source_hash"]
-        if (
-            str(bill.get("plain_summary_method", "")).startswith(METHOD_PREFIX)
-            and bill.get("plain_summary_source_hash") == digest_hash
-        ):
+        if not args.force and not needs_enrichment(bill, digest_hash):
             continue
         prepared = prepare_digest_for_model(item["title"], item["digest_text"])
         if not prepared:
@@ -427,6 +445,7 @@ def main():
     successful = 0
     rejected = 0
     failed_batches = 0
+    rejection_reasons = {}
 
     for batch_index, batch in enumerate(batches):
         expected = {item["bill_id"]: item for item in batch}
@@ -489,7 +508,7 @@ def main():
                 rejected += 1
                 continue
             seen_ids.add(bill_id)
-            checked = validate_item(item, original, original["digest_text"])
+            checked = validate_item(item, original, original["digest_text"], rejection_reasons)
             bill = by_id.get(bill_id)
             if not bill:
                 rejected += 1
@@ -529,7 +548,10 @@ def main():
     payload["plain_summary_generated_at"] = now_iso() if successful else payload.get("plain_summary_generated_at")
     with open(args.data, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-    print(f"Gemini enrichment complete: accepted={successful}, rejected={rejected}, failed_batches={failed_batches}")
+    print(
+        f"Gemini enrichment complete: accepted={successful}, rejected={rejected}, "
+        f"failed_batches={failed_batches}, rejection_reasons={rejection_reasons}"
+    )
     return 0
 
 
