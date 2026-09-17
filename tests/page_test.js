@@ -156,7 +156,7 @@ console.log("B: load with ?status=pending&wave=all&q=education");
   const expected = bills.filter(b =>
     b.status === "pending" &&
     [b.measure, b.title, b.author, b.author_info && b.author_info.name,
-      ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes("education")
+      b.plain_summary || "", ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes("education")
   ).length;
   const n = rows(e.els.list);
   check(n === expected, `pending “education” matches = ${expected} (got ${n})`);

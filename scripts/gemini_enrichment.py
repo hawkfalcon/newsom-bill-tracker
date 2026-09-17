@@ -302,6 +302,24 @@ def load_models(value):
     return models or DEFAULT_MODELS.split(",")
 
 
+def needs_enrichment(bill, digest_hash):
+    """Return whether this digest still needs a Gemini attempt.
+
+    Successful AI results use the method/source pair from the first version of
+    this script. Newer runs also record an enrichment hash when a response was
+    received but rejected, so a stable digest is not sent repeatedly after a
+    validation failure.
+    """
+    if bill.get("plain_summary_enrichment_hash") == digest_hash:
+        return False
+    if (
+        str(bill.get("plain_summary_method", "")).startswith(METHOD_PREFIX)
+        and bill.get("plain_summary_source_hash") == digest_hash
+    ):
+        return False
+    return True
+
+
 def make_batches(items, batch_size, max_input_chars):
     batches = []
     current = []
@@ -419,11 +437,16 @@ def main():
                 rejected += 1
                 continue
             checked = validate_item(item, original, original["digest_text"])
-            if not checked:
-                rejected += 1
-                continue
             bill = by_id.get(bill_id)
             if not bill:
+                rejected += 1
+                continue
+            if not checked:
+                # A response was received for this bill, but it failed our
+                # evidence/number/shape checks. Remember that attempt so the
+                # unchanged digest is not charged again on every refresh.
+                bill["plain_summary_enrichment_hash"] = original["source_hash"]
+                bill["plain_summary_enrichment_status"] = "rejected"
                 rejected += 1
                 continue
             bill["plain_summary"] = checked["plain_summary"]
@@ -433,6 +456,8 @@ def main():
             bill["plain_summary_model"] = used_model
             bill["plain_summary_source_hash"] = original["source_hash"]
             bill["plain_summary_evidence"] = checked["evidence"]
+            bill["plain_summary_enrichment_hash"] = original["source_hash"]
+            bill["plain_summary_enrichment_status"] = "accepted"
             bill["plain_summary_generated_at"] = now_iso()
             accepted_in_batch += 1
             successful += 1

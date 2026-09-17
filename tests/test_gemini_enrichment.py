@@ -7,6 +7,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 from gemini_enrichment import (
     build_prompt,
     make_batches,
+    needs_enrichment,
     prepare_digest_for_model,
     source_hash,
     validate_item,
@@ -77,6 +78,21 @@ class GeminiEnrichmentTests(unittest.TestCase):
 
     def test_hash_is_stable_for_whitespace(self):
         self.assertEqual(source_hash("A  bill\nwould require a report."), source_hash("A bill would require a report."))
+
+    def test_unchanged_digest_is_not_sent_again_after_accept_or_rejection(self):
+        digest_hash = source_hash("This bill would require a report.")
+        self.assertFalse(needs_enrichment({
+            "plain_summary_method": "gemini-gemini-3.8-flash",
+            "plain_summary_source_hash": digest_hash,
+        }, digest_hash))
+        self.assertFalse(needs_enrichment({
+            "plain_summary_method": "rules-v1",
+            "plain_summary_enrichment_hash": digest_hash,
+        }, digest_hash))
+        self.assertTrue(needs_enrichment({
+            "plain_summary_method": "rules-v1",
+            "plain_summary_source_hash": "different",
+        }, digest_hash))
 
 
 if __name__ == "__main__":

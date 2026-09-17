@@ -510,13 +510,15 @@ def main():
         )
         explanation = summarize_bill(r["title"], digest_text or r.get("summary"))
         old = previous.get(str(bid), {})
+        old_digest_is_current = bool(
+            digest_hash and old.get("plain_summary_source_hash") == digest_hash
+        )
         # Keep a previously accepted Gemini explanation only when it was based
         # on exactly this digest. The optional batch step can then process only
         # new, changed, or still-unenriched bills.
         old_is_current_ai = (
-            str(old.get("plain_summary_method", "")).startswith("gemini-")
-            and digest_hash
-            and old.get("plain_summary_source_hash") == digest_hash
+            old_digest_is_current
+            and str(old.get("plain_summary_method", "")).startswith("gemini-")
         )
         out_bills.append({
             "bill_id": bid,
@@ -536,6 +538,8 @@ def main():
             "plain_summary_source_hash": digest_hash,
             "plain_summary_evidence": old.get("plain_summary_evidence") if old_is_current_ai else None,
             "plain_summary_generated_at": old.get("plain_summary_generated_at") if old_is_current_ai else None,
+            "plain_summary_enrichment_hash": old.get("plain_summary_enrichment_hash") if old_digest_is_current else None,
+            "plain_summary_enrichment_status": old.get("plain_summary_enrichment_status") if old_digest_is_current else None,
             "latest_vote": r.get("latest_vote"),
             "dd_url": f"{DD_BASE}/{slug(bid)}",
             "leginfo_url": f"{BASE}{NAV_PATH}?bill_id={bid}",

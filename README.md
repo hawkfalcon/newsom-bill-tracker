@@ -67,8 +67,11 @@ only as the rich-detail page each bill links out to.
    a reader. It then sends up to 20 bills per request, rotates across the
    configured Gemini models, requires source evidence in the response, and
    leaves the deterministic result in place when a response fails validation.
-   Accepted summaries are stored in `data/bills.json` with their model and
-   source hash; the full digest cache is never embedded in the site.
+   Accepted and rejected attempts are recorded by official-digest hash, so an
+   unchanged bill is not sent again on later refreshes; use `--force` only
+   after intentionally changing the prompt or model. Accepted summaries are
+   stored in `data/bills.json` with their model and source hash; the full
+   digest cache is never embedded in the site.
 
 7. **`.github/workflows/update.yml`** — a GitHub Actions workflow that runs the
    data scripts **daily** (and on demand via "Run workflow") and commits the
