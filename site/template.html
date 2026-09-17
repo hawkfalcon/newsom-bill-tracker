@@ -285,6 +285,8 @@
     </div>
     <div style="margin-top:10px">
       Auto-refreshed daily via GitHub Actions. Built __BUILD_TIME__.
+      <span aria-hidden="true"> · </span>
+      <a href="https://github.com/hawkfalcon/newsom-bill-tracker" target="_blank" rel="noopener">View the source on GitHub ↗</a>
     </div>
   </div>
 </footer>
@@ -481,8 +483,9 @@ function rowHTML(b) {
   const summary = summaryText
     ? `<div class="summary"><span class="summary-label">In short:</span> ${esc(summaryText)}${confidenceNote}</div>`
     : "";
-  const sourceSummary = b.summary && b.summary !== b.plain_summary
-    ? `<details class="source-summary"><summary>Official digest excerpt</summary><div class="source-text">${esc(b.summary)}</div></details>`
+  const officialDigest = b.official_digest_excerpt || b.summary || "";
+  const sourceSummary = officialDigest && officialDigest !== b.plain_summary
+    ? `<details class="source-summary"><summary>Official digest excerpt</summary><div class="source-text">${esc(officialDigest)}</div></details>`
     : "";
   const bits = [];
   if (b.author) bits.push(`Author: ${authorMarkup(b)}`);

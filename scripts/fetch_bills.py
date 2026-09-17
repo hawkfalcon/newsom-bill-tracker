@@ -543,6 +543,7 @@ def main():
                 "author": bill["author"],
                 "status": kind,
                 "status_label": STATUS_LABELS[kind],
+                "official_digest_excerpt": truncate(cached["digest_text"], 1400),
             })
             reused[bid] = record
         else:
@@ -613,6 +614,7 @@ def main():
             "action_date": r.get("action_date"),
             "action": r.get("action"),
             "summary": r.get("summary"),
+            "official_digest_excerpt": truncate(digest_text, 1400) if digest_text else None,
             "plain_summary": old.get("plain_summary") if old_is_current_ai else explanation["text"],
             "plain_summary_confidence": old.get("plain_summary_confidence") if old_is_current_ai else explanation["confidence"],
             "plain_summary_flags": old.get("plain_summary_flags") if old_is_current_ai else explanation["flags"],
