@@ -318,8 +318,9 @@ def needs_enrichment(bill, digest_hash):
             attempts = 0
         # The first successful run left some deterministic fallbacks without a
         # per-bill result. They get one corrective attempt, then are cached just
-        # like accepted/rejected responses.
-        return status == "retry_pending" and attempts < 2
+        # like accepted/rejected responses. A transient request/response failure
+        # also gets one retry, but never on every daily refresh.
+        return status in {"retry_pending", "rejected", "request_failed", "no_response"} and attempts < 2
     if (
         str(bill.get("plain_summary_method", "")).startswith(METHOD_PREFIX)
         and bill.get("plain_summary_source_hash") == digest_hash

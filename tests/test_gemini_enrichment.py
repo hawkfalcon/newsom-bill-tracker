@@ -91,6 +91,12 @@ class GeminiEnrichmentTests(unittest.TestCase):
             "plain_summary_enrichment_status": "retry_pending",
             "plain_summary_enrichment_attempts": 1,
         }, digest_hash))
+        self.assertTrue(needs_enrichment({
+            "plain_summary_method": "rules-v1",
+            "plain_summary_enrichment_hash": digest_hash,
+            "plain_summary_enrichment_status": "rejected",
+            "plain_summary_enrichment_attempts": 1,
+        }, digest_hash))
         self.assertFalse(needs_enrichment({
             "plain_summary_method": "rules-v1",
             "plain_summary_enrichment_hash": digest_hash,
