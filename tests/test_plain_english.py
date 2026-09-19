@@ -57,6 +57,72 @@ class PlainEnglishTests(unittest.TestCase):
         )
         self.assertIn("source_excerpt_truncated", result["flags"])
 
+    # ---- Shapes the original matcher missed (found in real digests) ----
+
+    def test_adverb_between_would_and_verb(self):
+        result = summarize_bill(
+            "Transit-oriented development: exclusions.",
+            "Existing law specifies exclusions. "
+            "This bill would also exclude a contributing site within a historic "
+            "district from the provisions described above.",
+        )
+        self.assertEqual(result["confidence"], "high")
+        self.assertTrue(result["text"].startswith("Excludes a contributing site"))
+
+    def test_adverbs_further_additionally_instead(self):
+        for adverb, verb in (
+            ("further", "update"),
+            ("additionally", "require"),
+            ("instead", "require"),
+        ):
+            result = summarize_bill(
+                "Test bill.",
+                f"This bill would {adverb} {verb} the applicable provisions "
+                "as provided.",
+            )
+            self.assertEqual(result["confidence"], "high", f"adverb: {adverb}")
+            self.assertNotIn("no_change_sentence", result["flags"])
+
+    def test_parenthetical_between_would_and_verb(self):
+        result = summarize_bill(
+            "Active Transportation Program: guidelines.",
+            "This bill would, on and after January 1, 2028, instead require the "
+            "guidelines with regard to project eligibility to include specified "
+            "criteria.",
+        )
+        self.assertEqual(result["confidence"], "high")
+        self.assertTrue(result["text"].startswith("Requires the guidelines"))
+
+    def test_parenthetical_with_inner_comma(self):
+        result = summarize_bill(
+            "Multifamily Housing Program: Homekey.",
+            "This bill would, for Homekey awards made on or after July 1, 2026, "
+            "require the department to consider allowing the local agency to use "
+            "the funds.",
+        )
+        self.assertEqual(result["confidence"], "high")
+        self.assertTrue(result["text"].startswith("Requires the department"))
+
+    def test_newer_operative_verbs(self):
+        for verb in ("lower", "incorporate", "define", "codify"):
+            result = summarize_bill(
+                "Test bill.",
+                f"This bill would {verb} the threshold specified in existing law.",
+            )
+            self.assertEqual(result["confidence"], "high", f"verb: {verb}")
+
+    def test_existing_law_would_parenthetical_is_not_a_change(self):
+        # "Existing law would, on or after ..., require ..." describes the
+        # current law; the matcher may select the sentence, but the rewriter
+        # must not turn it into a claimed change.
+        result = summarize_bill(
+            "Reporting.",
+            "Existing law would, on or after January 1, 2027, require reports "
+            "from agencies.",
+        )
+        self.assertEqual(result["confidence"], "low")
+        self.assertIn("no_change_sentence", result["flags"])
+
 
 if __name__ == "__main__":
     unittest.main()

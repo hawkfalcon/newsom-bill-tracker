@@ -39,6 +39,7 @@ from plain_english import summarize_bill
 BASE = "https://leginfo.legislature.ca.gov/faces"
 SEARCH_PATH = "/billSearchClient.xhtml"
 STATUS_PATH = "/billStatusClient.xhtml"
+HISTORY_PATH = "/billHistoryClient.xhtml"
 NAV_PATH = "/billNavClient.xhtml"
 TEXT_PATH = "/billTextClient.xhtml"
 VOTES_PATH = "/billVotesClient.xhtml"
@@ -173,6 +174,31 @@ def fetch_status_page(bill_id):
     return r.text
 
 
+def fetch_history_page(bill_id):
+    """Full action history (the status page shows only the last five rows)."""
+    r = session_for_thread().get(
+        BASE + HISTORY_PATH + f"?bill_id={bill_id}", timeout=45
+    )
+    r.raise_for_status()
+    return r.text
+
+
+def parse_history_rows(html):
+    """Parse date/action rows from a LegInfo history table (any length)."""
+    rows = re.findall(
+        r'<tr>\s*<td scope="row">(\d{2}/\d{2}/\d{2})</td>\s*<td>(.*?)</td>',
+        html, re.S,
+    )
+    history = []
+    for d, a in rows:
+        a = html_mod.unescape(re.sub(r"<[^>]+>", " ", a))
+        a = re.sub(r"\s+", " ", a).strip()
+        date = parse_date_mmddyy(d)
+        if date:
+            history.append((date, a))
+    return history
+
+
 def parse_status_page(html):
     """Return (summary_dates, history).
 
@@ -193,18 +219,7 @@ def parse_status_page(html):
         }.get(label, label.lower().replace(" ", "_"))
         summary[summary_key] = parse_date_mmddyy(m.group(2).strip())
 
-    rows = re.findall(
-        r'<tr>\s*<td scope="row">(\d{2}/\d{2}/\d{2})</td>\s*<td>(.*?)</td>',
-        html, re.S,
-    )
-    history = []
-    for d, a in rows:
-        a = html_mod.unescape(re.sub(r"<[^>]+>", " ", a))
-        a = re.sub(r"\s+", " ", a).strip()
-        date = parse_date_mmddyy(d)
-        if date:
-            history.append((date, a))
-    return summary, history
+    return summary, parse_history_rows(html)
 
 
 def extract_action(summary, history, kind):
@@ -213,6 +228,10 @@ def extract_action(summary, history, kind):
         for date, text in history:
             if "vetoed by" in text.lower():
                 return date, text
+        # Same lag protection as the signed path: the status summary may show
+        # the veto date before the history table has caught up.
+        if summary.get("vetoed_date"):
+            return summary["vetoed_date"], "Vetoed by the Governor."
     elif kind == "signed":
         for date, text in history:
             if "approved by the governor" in text.lower():
@@ -228,8 +247,10 @@ def extract_action(summary, history, kind):
         for date, text in history:
             if "enrolled" in text.lower():
                 return date, text
-        if summary.get("Enrolled Date"):
-            return summary["Enrolled Date"], "Enrolled."
+        # parse_status_page stores the "Enrolled Date:" field under
+        # "pending_date" (see the summary_key map above).
+        if summary.get("pending_date"):
+            return summary["pending_date"], "Enrolled."
     return None, None
 
 
@@ -253,6 +274,17 @@ def fetch_one(bill):
 
     kind = classify(bill["status"])
     date, text = extract_action(summary, history, kind)
+    if date is None and kind in ("signed", "vetoed"):
+        # The Governor's action can be missing from the "last 5" window (or
+        # the summary can lag).  Fall back to the full action history page —
+        # one extra request, only for the rare bill that needs it.
+        try:
+            time.sleep(random.uniform(0.05, 0.15))  # be polite
+            date, text = extract_action(
+                {}, parse_history_rows(fetch_history_page(bill_id)), kind
+            )
+        except Exception:  # noqa: BLE001 - action date is a nice-to-have
+            pass
 
     summary_text = None
     digest_text = None
@@ -411,7 +443,7 @@ FINAL_KINDS = {"signed", "vetoed"}
 
 def normalize_measure(measure):
     measure = measure or ""
-    return measure.replace("-", " ") if re.fullmatch(r"[A-Za-z]+-\\d+", measure) else measure
+    return measure.replace("-", " ") if re.fullmatch(r"[A-Za-z]+-\d+", measure) else measure
 
 
 def search_fingerprint(bill):
@@ -430,14 +462,61 @@ def search_fingerprint(bill):
     )
 
 
-def can_reuse_final(bill, cached):
-    """Only reuse terminal records with a matching row and full digest cache."""
+def can_reuse_final(bill, cached, fallback_record=None):
+    """Only reuse terminal records with a matching row and full digest cache.
+
+    The record itself lives in the last ``bills.json`` (``fallback_record``)
+    in cache format v2; v1 caches embedded a copy, which is still accepted.
+    """
     return (
         classify(bill.get("status")) in FINAL_KINDS
         and cached.get("fingerprint") == search_fingerprint(bill)
         and bool(cached.get("digest_text"))
-        and isinstance(cached.get("record"), dict)
+        and isinstance(cached.get("record") or fallback_record, dict)
     )
+
+
+CACHE_VERSION = 2
+LEGINFO_STATUS_BY_KIND = {
+    "signed": LEGINFO_SIGNED_STATUS,
+    "vetoed": LEGINFO_VETOED_STATUS,
+    "pending": LEGINFO_PENDING_STATUS,
+}
+
+
+def load_cache(path):
+    """Load the incremental cache, migrating v1 entries to the v2 shape.
+
+    v1 embedded a full copy of each output record next to its digest, which
+    duplicated most of bills.json and bloated every daily commit.  v2 keeps
+    only the fingerprint and digest; the record is recovered from the last
+    bills.json by the caller.  v1 fingerprints were computed with a broken
+    measure normalization, so they are re-derived from the stored record.
+    """
+    try:
+        with open(path, encoding="utf-8") as cache_file:
+            payload = json.load(cache_file)
+    except (OSError, ValueError, TypeError):
+        return {}, None
+    if not isinstance(payload, dict):
+        return {}, None
+    entries = payload.get("bills", {}) or {}
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        record = entry.get("record")
+        if isinstance(record, dict):
+            kind = record.get("status")
+            if payload.get("version") != CACHE_VERSION and kind in LEGINFO_STATUS_BY_KIND:
+                entry["fingerprint"] = search_fingerprint({
+                    "bill_id": record.get("bill_id"),
+                    "measure": normalize_measure(record.get("measure") or ""),
+                    "title": record.get("title") or "",
+                    "author": record.get("author") or "",
+                    "status": LEGINFO_STATUS_BY_KIND[kind],
+                })
+            entry.pop("record", None)
+    return entries, payload.get("session")
 
 
 # --------------------------------------------------------------------------
@@ -487,14 +566,12 @@ def main():
         except (OSError, ValueError, TypeError):
             previous = {}
 
-    cache_bills = {}
-    if os.path.exists(args.cache):
-        try:
-            with open(args.cache, encoding="utf-8") as cache_file:
-                cache_payload = json.load(cache_file)
-            cache_bills = cache_payload.get("bills", {})
-        except (OSError, ValueError, TypeError):
-            cache_bills = {}
+    cache_bills, cache_session = (
+        load_cache(args.cache) if os.path.exists(args.cache) else ({}, None)
+    )
+    if cache_session and cache_session != SESSION:
+        log(f"  note: cache is from session {cache_session}; its records will "
+            "not match this session's rows and will be refetched")
 
     log(f"Fetching bill list for session {SESSION} …")
     s = requests.Session()
@@ -530,11 +607,13 @@ def main():
             continue
         bid = str(bill["bill_id"])
         cached = cache_bills.get(bid, {})
-        cached_record = cached.get("record")
+        # v2 caches no record copy; the last bills.json is the store of
+        # record content.  v1 entries may still carry their embedded copy.
+        cached_record = cached.get("record") or previous.get(bid)
         # A signed or vetoed bill is terminal for this tracker. Once its search
         # row and full digest are cached, reusing it cannot hide a pending-to-
         # final transition (pending bills are always fetched below).
-        if not args.refresh_all and can_reuse_final(bill, cached):
+        if not args.refresh_all and can_reuse_final(bill, cached, previous.get(bid)):
             record = dict(cached_record)
             record.update({
                 "bill_id": bid,
@@ -659,17 +738,17 @@ def main():
     cache_entries = {}
     for bill in bills:
         bid = str(bill["bill_id"])
-        output_record = out_by_id.get(bid)
-        if not output_record:
+        if bid not in out_by_id:
             continue
         if bid in fetched_by_id:
             digest_text = fetched_by_id[bid].get("digest_text") or ""
         else:
             digest_text = cache_bills.get(bid, {}).get("digest_text") or ""
+        # v2: no record copy — bills.json already stores the complete record,
+        # so keeping a duplicate here only doubled the committed cache size.
         cache_entries[bid] = {
             "fingerprint": search_fingerprint(bill),
             "digest_text": digest_text,
-            "record": output_record,
         }
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -679,7 +758,7 @@ def main():
     os.makedirs(os.path.dirname(args.cache) or ".", exist_ok=True)
     with open(args.cache, "w", encoding="utf-8") as f:
         json.dump(
-            {"version": 1, "session": SESSION, "bills": cache_entries},
+            {"version": CACHE_VERSION, "session": SESSION, "bills": cache_entries},
             f, ensure_ascii=False, separators=(",", ":")
         )
     log(f"  wrote LegInfo cache for {len(cache_entries)} bills")
@@ -693,7 +772,7 @@ def main():
             digest_text = cached.get("digest_text") or ""
             if not digest_text:
                 continue
-            record = cached["record"]
+            record = out_by_id[bid]
             ai_sources.append({
                 "bill_id": bid,
                 "measure": record.get("measure", ""),

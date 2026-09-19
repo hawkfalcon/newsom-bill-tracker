@@ -26,6 +26,13 @@ from datetime import datetime, timezone
 from urllib import error as url_error
 from urllib import request as url_request
 
+try:
+    from plain_english import ACTION_RE
+except ImportError:  # Allows importing this module from the repository root.
+    from scripts.plain_english import ACTION_RE
+
+# ACTION_RE is shared with plain_english (operative-provision selector); keep
+# the single source of truth there so both paths pick the same sentences.
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODELS = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.1-flash-lite,gemini-3.5-flash-lite"
@@ -34,15 +41,6 @@ DEFAULT_MAX_INPUT_CHARS = 90000
 DEFAULT_MAX_OUTPUT_TOKENS = 7000
 METHOD_PREFIX = "gemini-"
 OMNIBUS_ENRICHMENT_VERSION = "omnibus-v2"
-
-# These are intentionally broad.  They select operative provisions, conditions,
-# exceptions, dates, money, penalties, and implementation details without
-# pretending to reproduce every sentence of a legal digest.
-ACTION_RE = re.compile(
-    r"\b(?:this|the)\s+bill\s+(?:would\s+)?(?:require|authorize|prohibit|establish|create|expand|extend|revise|amend|repeal|delete|eliminate|increase|decrease|reduce|allow|permit|provide|direct|exempt|impose|modify|change|specify|clarify|make|remove|appropriate|fund|designate|rename|declare|transfer|consolidate|continue|restore|limit|ban|add)\b"
-    r"|\bwould\s+(?:require|authorize|prohibit|establish|create|expand|extend|revise|amend|repeal|delete|eliminate|increase|decrease|reduce|allow|permit|provide|direct|exempt|impose|modify|change|specify|clarify|make|remove|appropriate|fund|designate|rename|declare|transfer|consolidate|continue|restore|limit|ban|add)\b",
-    re.I,
-)
 IMPORTANT_RE = re.compile(
     r"\b(?:except|unless|provided that|notwithstanding|if|when|beginning|starting|on or before|by\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)|effective|deadline|penalt(?:y|ies)|fine|fee|fees|dollar|\$|percent|%|appropriat|fund|report|enforce|regulation|definition|means|shall)\b",
     re.I,
@@ -269,7 +267,12 @@ def _number_supported(number, source_text):
 
 
 def validate_item(item, expected, source_text, rejection_reasons=None):
-    """Return a safe result or None; never trust unsupported model prose."""
+    """Return a safe result or None; never trust unsupported model prose.
+
+    ``source_text`` must be the exact text given to the model (the prepared
+    digest sentences), so a quote that only exists in the parts of the digest
+    that were withheld cannot pass as evidence.
+    """
     def reject(reason):
         if rejection_reasons is not None:
             rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
@@ -371,6 +374,22 @@ def needs_enrichment(bill, digest_hash):
     return True
 
 
+def reset_stale_pending(payload):
+    """Reset bills a killed run left with status "pending".
+
+    A run sets "pending" before making a request and only records a terminal
+    status afterwards; a crash in between would otherwise strand the bill —
+    "pending" is not retryable, so the deterministic fallback would remain
+    forever.  Returns the number of bills reset.
+    """
+    stale = 0
+    for bill in payload.get("bills", []):
+        if bill.get("plain_summary_enrichment_status") == "pending" and bill.get("plain_summary_enrichment_hash"):
+            bill["plain_summary_enrichment_status"] = "retry_pending"
+            stale += 1
+    return stale
+
+
 def make_batches(items, batch_size, max_input_chars):
     batches = []
     current = []
@@ -415,6 +434,10 @@ def main():
     with open(args.data, encoding="utf-8") as handle:
         payload = json.load(handle)
     source = load_source(args.source) if os.path.exists(args.source) else {}
+
+    stale = reset_stale_pending(payload)
+    if stale:
+        print(f"Reset {stale} bills stuck in 'pending' from an interrupted run.")
 
     eligible = []
     for bill in payload.get("bills", []):
@@ -514,7 +537,9 @@ def main():
                 rejected += 1
                 continue
             seen_ids.add(bill_id)
-            checked = validate_item(item, original, original["digest_text"], rejection_reasons)
+            # Evidence must be verbatim from the sentences the model actually
+            # received, not from the fuller digest kept locally.
+            checked = validate_item(item, original, original["prepared_digest"], rejection_reasons)
             bill = by_id.get(bill_id)
             if not bill:
                 rejected += 1

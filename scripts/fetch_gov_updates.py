@@ -54,11 +54,29 @@ BATCH_TITLE_RE = re.compile(
 )
 
 # "AB 70" / "SB 771" / "ABX1 2" / "AB-70" at the start of a bill entry.
+# The hyphen class includes U+2011 (non-breaking hyphen), which the Governor's
+# site uses inconsistently.
 BILL_PATTERN = re.compile(
     r"(?:^|[>\n])\s*(?:[\u2022\u2023\u25E6\u2043\u2219\*\-–—•]\s*)?"
-    r"(AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s]?(\d+)\b",
+    r"(AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)[-\s\u2011]?(\d+)\b",
     re.I,
 )
+
+
+def anchor_href_before(text, pos, lookback=600):
+    """If the position is inside an <a> tag, return that anchor's href."""
+    seg = text[max(0, pos - lookback):pos]
+    open_idx = seg.rfind("<a")
+    if open_idx == -1:
+        return None
+    close_idx = seg.rfind("</a>")
+    if close_idx != -1 and close_idx > open_idx:
+        return None  # the last anchor was already closed before pos
+    tag_end = seg.find(">", open_idx)
+    if tag_end == -1:
+        return None
+    m = re.search(r'href=["\']([^"\']+)["\']', seg[open_idx:tag_end], re.I)
+    return m.group(1) if m else None
 
 
 def norm(measure):
@@ -88,13 +106,18 @@ def get_json(url, params, retries=4):
 
 
 def fetch_posts(after_iso):
-    """Return all candidate legislative update / bill signing posts since `after_iso`."""
+    """Return (posts, ok) for candidate posts since `after_iso`.
+
+    `ok` is False when any API page failed, i.e. the result set is known to
+    be incomplete — callers must not treat it as the full picture.
+    """
     queries = [
         {"search": "legislat"},
         {"search": "veto"},
         {"tags": 189},  # Official WordPress "Legislation" tag
     ]
     posts_by_id = {}
+    ok = True
     for q_params in queries:
         page = 1
         while True:
@@ -110,6 +133,7 @@ def fetch_posts(after_iso):
                 data, total_pages = get_json(API, params)
             except Exception as e:  # noqa: BLE001
                 print(f"  warning: query {q_params} page {page} failed: {e}")
+                ok = False
                 break
 
             if not data:
@@ -125,11 +149,12 @@ def fetch_posts(after_iso):
             page += 1
             time.sleep(0.3)
 
-    return sorted(
+    posts = sorted(
         posts_by_id.values(),
         key=lambda p: p.get("date", ""),
         reverse=True,
     )
+    return posts, ok
 
 
 def clean_html(fragment):
@@ -169,6 +194,14 @@ def parse_bill_items(html_section):
         if nid in seen:
             continue
         seen.add(nid)
+
+        # A bill code inside an anchor that links to another gov.ca.gov page
+        # is a cross-reference in press-release prose (e.g. "signed into law
+        # AB 238" linking to last year's signing post) — not a bill in this
+        # announcement.  Plain-text entries and LegInfo-linked entries keep.
+        href = anchor_href_before(unescaped, m.start(1))
+        if href and "gov.ca.gov" in href:
+            continue
 
         start = m.start()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(unescaped)
@@ -258,28 +291,60 @@ def main():
 
     after_iso = args.after + "T00:00:00"
     print(f"Fetching gov.ca.gov announcements since {args.after} …")
-    posts = fetch_posts(after_iso)
-    print(f"  found {len(posts)} candidate posts")
+    posts, fetch_ok = fetch_posts(after_iso)
+    print(f"  found {len(posts)} candidate posts (complete={fetch_ok and bool(posts)})")
 
+    # Re-parse all candidate posts oldest -> newest so a later post that
+    # corrects an earlier one (bill listed under the wrong batch) wins, and
+    # the earliest announcement date / its post link are kept.
+    parsed_actions = {}
     parsed_posts = 0
-    new_or_updated = 0
-    for p in posts:
+    for p in sorted(posts, key=lambda p: p.get("date", "")):
         parsed = parse_post(p)
         if parsed:
             parsed_posts += 1
         for k, v in parsed.items():
+            if k not in parsed_actions:
+                parsed_actions[k] = v
+                continue
+            existing = parsed_actions[k]
+            if v["action"] != existing.get("action"):
+                print(f"  note: {k} action corrected {existing.get('action')} -> "
+                      f"{v['action']} by newer post '{v.get('title', '')}'")
+                parsed_actions[k] = v
+                continue
+            if v["date"] < existing["date"]:
+                # Keep the earliest announcement (its post is the canonical link)
+                if existing.get("msg_url") and not v.get("msg_url"):
+                    v["msg_url"] = existing["msg_url"]
+                parsed_actions[k] = v
+            elif v.get("msg_url") and not existing.get("msg_url"):
+                existing["msg_url"] = v["msg_url"]
+
+    if fetch_ok and posts:
+        # Complete re-fetch: rebuild from the posts so stale entries — e.g.
+        # phantom actions from old press-release mentions the parser no
+        # longer treats as announcements — self-heal on the next run.
+        # Carry over message links the current parse didn't find for
+        # entries it did still find.
+        dropped = sorted(k for k in actions if k not in parsed_actions)
+        for k in dropped:
+            print(f"  note: dropping stale action {k} ({actions[k].get('measure')})")
+        for k, v in parsed_actions.items():
+            if not v.get("msg_url") and k in actions and actions[k].get("msg_url"):
+                v["msg_url"] = actions[k]["msg_url"]
+        actions = parsed_actions
+    else:
+        # Incomplete fetch: keep the previous file as the source of truth
+        # and apply only safe improvements (new entries, missing links).
+        print("  note: fetch incomplete; keeping previous actions, adding new ones")
+        for k, v in parsed_actions.items():
             if k not in actions:
                 actions[k] = v
-                new_or_updated += 1
-            else:
-                # Update if new one has a message link and existing doesn't
-                if v.get("msg_url") and not actions[k].get("msg_url"):
-                    actions[k]["msg_url"] = v["msg_url"]
-                # Keep earliest announcement date
-                if v["date"] < actions[k]["date"]:
-                    actions[k] = v
+            elif v.get("msg_url") and not actions[k].get("msg_url"):
+                actions[k]["msg_url"] = v["msg_url"]
 
-    print(f"  parsed {parsed_posts} announcement posts -> total {len(actions)} bill actions ({new_or_updated} new/updated)")
+    print(f"  parsed {parsed_posts} announcement posts -> total {len(actions)} bill actions")
 
     signed = sum(1 for v in actions.values() if v["action"] == "signed")
     vetoed = sum(1 for v in actions.values() if v["action"] == "vetoed")

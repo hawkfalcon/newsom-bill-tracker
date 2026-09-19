@@ -188,7 +188,13 @@ def enrich_bill(bill, authors=None):
     authors = AUTHORS if authors is None else authors
     author = bill.get("author") or ""
     info = authors.get(author)
-    bill["topics"] = classify_topics(bill.get("title"), bill.get("summary"))
+    # Score against the longest stored digest text (the 1400-char excerpt when
+    # present), not just the 280-char list summary, so topic signals later in
+    # the digest are not silently ignored.
+    bill["topics"] = classify_topics(
+        bill.get("title"),
+        bill.get("official_digest_excerpt") or bill.get("summary"),
+    )
     bill["author_info"] = dict(info) if info else None
 
     if not bill.get("plain_summary"):

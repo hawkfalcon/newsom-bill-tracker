@@ -15,6 +15,7 @@ from fetch_gov_updates import (
     BILL_PATTERN,
     SIGNED_MARKER,
     VETOED_MARKER,
+    anchor_href_before,
     extract_msg_url,
     norm,
     parse_bill_items,
@@ -198,6 +199,84 @@ class TestFetchGovUpdates(unittest.TestCase):
         }
         res = parse_post(post)
         self.assertEqual(res, {})
+
+
+class TestCrossPostLinkExclusion(unittest.TestCase):
+    """Bill codes that are cross-references to other gov.ca.gov posts
+    (press-release prose) must not become actions for this post."""
+
+    def test_anchor_href_before_plain_text(self):
+        self.assertIsNone(anchor_href_before("plain text SB 53 here", 15))
+
+    def test_anchor_href_before_closed_anchor(self):
+        text = 'see <a href="https://www.gov.ca.gov/old/post/">here</a> and then SB 53'
+        pos = text.rfind("SB")
+        self.assertIsNone(anchor_href_before(text, pos))
+
+    def test_anchor_href_before_open_anchor(self):
+        text = 'signed into law <a href="https://www.gov.ca.gov/2025/09/22/ab-238/">AB 238</a>'
+        pos = text.rfind("AB")
+        self.assertEqual(
+            anchor_href_before(text, pos),
+            "https://www.gov.ca.gov/2025/09/22/ab-238/",
+        )
+
+    def test_cross_post_linked_bill_skipped(self):
+        # Gasoline-price press release: bills are links to older signing posts.
+        section = (
+            "fought for and signed into law: "
+            '<a href="https://www.gov.ca.gov/2023-03-28/gas-price-gouging/">SBX1\u20112</a> '
+            "and "
+            '<a href="https://www.gov.ca.gov/2024-10-14/gas-price-spikes/">ABX2-1</a>, '
+            "which created first-in-the-nation transparency requirements."
+        )
+        self.assertEqual(parse_bill_items(section), [])
+
+    def test_signed_into_law_anchor_text_skipped(self):
+        # "signed into law AB 238" is the whole anchor text of a cross-link.
+        section = (
+            "the Governor "
+            '<a href="https://www.gov.ca.gov/2025-09-22/fire-survivor-mortgage-relief/">'
+            "signed into law AB 238</a> "
+            "(Harabedian), which extended forbearance for up to 12 months."
+        )
+        self.assertEqual(parse_bill_items(section), [])
+
+    def test_leginfo_linked_bill_kept(self):
+        section = (
+            "he has signed the following bills:\n"
+            '<li><a href="https://leginfo.legislature.ca.gov/faces/billTextClient.php?bill_id=AB113">AB 113</a> '
+            "by Assemblymember John Smith (D-Sampleville) \u2014 Sample topic. "
+            'A signing message can be found <a href="https://www.gov.ca.gov/wp-content/uploads/2026/09/AB-113-Signing-Message.pdf">here</a>.</li>'
+        )
+        res = parse_bill_items(section)
+        self.assertEqual(res, [("ab113", "AB 113", "https://www.gov.ca.gov/wp-content/uploads/2026/09/AB-113-Signing-Message.pdf")])
+
+    def test_u2011_hyphen_bill_parsed(self):
+        res = parse_bill_items("AB\u2011113 by Assemblymember John Smith (D-Sampleville) \u2014 Sample topic.")
+        self.assertEqual(res[0][0], "ab113")
+        self.assertEqual(res[0][1], "AB 113")
+
+    def test_press_release_post_returns_no_actions(self):
+        """The real-world phantom: a press release that merely references
+        previously signed bills via cross-post links."""
+        post = {
+            "id": 105954,
+            "title": {"rendered": "Governor Newsom blasts Trump for raising gasoline prices"},
+            "date": "2026-03-10T12:00:00",
+            "link": "https://www.gov.ca.gov/2026-03-10/gasoline-prices/",
+            "content": {
+                "rendered": (
+                    "<p>SACRAMENTO \u2013 ... These are tools Governor Newsom fought for and "
+                    "signed into law: "
+                    '<a href="https://www.gov.ca.gov/2023-03-28/gas-price-gouging-law/">SBX1\u20112</a> '
+                    "and "
+                    '<a href="https://www.gov.ca.gov/2024-10-14/prevent-gas-price-spikes/">ABX2-1</a>, '
+                    "which created first-in-the-nation transparency requirements for gas stations.</p>"
+                )
+            },
+        }
+        self.assertEqual(parse_post(post), {})
 
 
 if __name__ == "__main__":
