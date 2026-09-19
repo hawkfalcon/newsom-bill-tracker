@@ -74,12 +74,19 @@ as an outbound rich-detail link.
    official Legislative Counsel subject classifications.
 
 6. **`scripts/plain_english.py`** — rewrites operative sentences in the
-   official Legislative Counsel digest into a short “In short” explanation.
-   It runs without an LLM, API key, or network request. If the stored excerpt
-   contains only background about existing law, it falls back to a
-   low-confidence topic description instead of inventing a policy change. The
-   original digest excerpt remains available in the expandable source section
-   and the LegInfo link.
+   official Legislative Counsel digest into the short plain-English
+   explanation shown under each bill. It handles the “This bill/measure
+   would …” lead (including date parentheticals before or after “would”),
+   present-tense and compound-predicate sentences, and resolution measures
+   (ACR/SCR/SJR/AJR), and neutralizes back-references to provisions of
+   existing law (“those provisions” → “the provisions”). Sentences are
+   length-capped and the card clips at about 480 characters, so no
+   explanation buries the bill itself; it runs without an LLM, API key, or
+   network request. If the stored excerpt contains only background about
+   existing law, it falls back to a clearly-labeled low-confidence topic
+   description instead of inventing a policy change. The original digest
+   excerpt remains available in the expandable source section and the
+   LegInfo link.
 
 7. **`scripts/gemini_enrichment.py`** — an optional offline/batch enrichment
    pass. It first reduces each full official digest to the operative sentences,

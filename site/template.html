@@ -135,7 +135,6 @@
   .title a{color:var(--ink)}
   .title a:hover{color:var(--blue)}
   .summary{font-size:.86rem;color:#3f3b36;margin-top:5px;overflow-wrap:anywhere}
-  .summary-label{font-weight:800;color:var(--blue)}
   .summary-note{font-size:.72rem;color:var(--muted);font-style:italic}
   .summary-note.ai-note{color:#28734b;font-style:normal;font-weight:700}
   .source-summary{font-size:.76rem;color:var(--muted);margin-top:5px}
@@ -279,9 +278,10 @@
     </div>
     <div style="margin-top:10px">
       Topic labels are approximate, deterministic matches against each bill's official title and digest.
-      “In short” explanations are generated from the official Legislative Counsel digest. Some are optional
-      AI-generated batch enrichments, clearly labeled as such and retained only as secondary explanations;
-      the official digest and LegInfo record remain the source of truth. These are not legal advice.
+      The plain-English explanations below each bill are generated from the official Legislative Counsel
+      digest (summarized, not quoted in full). Some are optional AI-generated batch enrichments, clearly
+      labeled as such and retained only as secondary explanations; the official digest and LegInfo record
+      remain the source of truth. These are not legal advice.
       Author names and chamber/district labels are matched to the 2025–26 legislative roster.
     </div>
     <div style="margin-top:10px">
@@ -345,6 +345,20 @@ const waveNoteEl = document.getElementById("wavenote");
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// Keep card explanations skimmable: multi-provision summaries are clipped at
+// a sentence boundary. The full text stays in the data (and search).
+const SUMMARY_MAX_CHARS = 480;
+function clipSummary(text) {
+  text = String(text ?? "");
+  if (text.length <= SUMMARY_MAX_CHARS) return text;
+  const cut = text.slice(0, SUMMARY_MAX_CHARS);
+  const period = cut.lastIndexOf(". ");
+  const space = cut.lastIndexOf(" ");
+  const at = Math.max(period, space);
+  if (at < SUMMARY_MAX_CHARS * 0.5) return cut.trimEnd() + " \u2026";
+  return (period > space ? cut.slice(0, period + 1) : cut.slice(0, space)) + " \u2026";
 }
 
 let topicActiveIndex = 0;
@@ -525,7 +539,7 @@ function rowHTML(b) {
     : "";
   const summaryText = b.plain_summary || b.summary;
   const summary = summaryText
-    ? `<div class="summary"><span class="summary-label">In short:</span> ${esc(summaryText)}${confidenceNote}</div>`
+    ? `<div class="summary">${esc(clipSummary(summaryText))}${confidenceNote}</div>`
     : "";
   const officialDigest = b.official_digest_excerpt || b.summary || "";
   const sourceSummary = officialDigest && officialDigest !== b.plain_summary

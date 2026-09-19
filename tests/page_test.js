@@ -330,5 +330,27 @@ console.log("J: topic menu arrow keys + Enter");
   check(e.history.calls.at(-1) === "?topic=Budget", "Escape did not change the topic");
 }
 
+// ---------- scenario K: long summaries are clipped on the card ----------
+console.log("K: card explanations stay under the length cap");
+{
+  const longest = bills.reduce((a, b) =>
+    ((b.plain_summary || "").length > (a.plain_summary || "").length ? b : a), bills[0]);
+  const e = runPage(`?q=${encodeURIComponent(longest.measure)}&wave=all&status=signed,vetoed,pending`);
+  check(rows(e.els.list) >= 1,
+        `searching the longest-explanation measure renders rows (got ${rows(e.els.list)})`);
+  const unesc = s => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  const summaries = [...e.els.list.innerHTML.matchAll(
+    /<div class="summary">([\s\S]*?)<\/div>/g
+  )].map(m => unesc(m[1]).replace(/<[^>]+>/g, "").trim());
+  check(summaries.length > 0, "summaries rendered on the rows");
+  const maxLen = summaries.length ? Math.max(...summaries.map(s => s.length)) : 0;
+  check(maxLen <= 485, `no card explanation exceeds the cap (longest ${maxLen})`);
+  if ((longest.plain_summary || "").length > 480) {
+    check(summaries.some(s => s.endsWith("\u2026")),
+          "over-long explanations are clipped with an ellipsis");
+  }
+}
+
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL CHECKS PASSED");
 process.exit(failures ? 1 : 0);
