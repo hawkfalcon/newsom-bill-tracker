@@ -30,8 +30,10 @@ const DEF_WAVE = "2026";
 const DEF_SET = ["signed", "vetoed"];
 const defCount = cnt(DEF_WAVE, "signed") + cnt(DEF_WAVE, "vetoed");
 const pendAll = cnt("all", "pending");
+const pend2026 = cnt(DEF_WAVE, "pending");
 const veto2025 = cnt("2025", "vetoed");
 const veto2026 = cnt(DEF_WAVE, "vetoed");
+const vetoAll = bills.filter(b => b.status === "vetoed").length;
 
 // ---------- minimal DOM stubs ----------
 let failures = 0;
@@ -123,7 +125,7 @@ function runPage(search) {
   return env;
 }
 
-const rows = el => (el.innerHTML.match(/<div class="row">/g) || []).length;
+const rows = el => (el.innerHTML.match(/<div class="row(?: [^"]*)?">/g) || []).length;
 const pressed = el => el.getAttribute("aria-pressed") === "true";
 
 // ---------- scenario A: fresh load, no params ----------
@@ -140,6 +142,8 @@ console.log("A: default load (no URL params)");
   check(e.els.list.innerHTML.includes("class=\"author-link\"") &&
         e.els.list.innerHTML.includes("https://calmatters.digitaldemocracy.org/bills#author="),
         "author labels link to Digital Democracy author filters");
+  check(e.els.list.innerHTML.includes('class="row signed"'),
+        "signed bill rows carry the signed outline class");
   check(e.history.calls.length === 0, "URL stays clean on default load");
 }
 
@@ -154,7 +158,7 @@ console.log("B: load with ?status=pending&wave=all&q=education");
   const expected = bills.filter(b =>
     b.status === "pending" &&
     [b.measure, b.title, b.author, b.author_info && b.author_info.name,
-      ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes("education")
+      b.plain_summary || "", ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes("education")
   ).length;
   const n = rows(e.els.list);
   check(n === expected, `pending “education” matches = ${expected} (got ${n})`);
@@ -196,7 +200,7 @@ console.log("D: toggling statuses updates list + URL");
   e.els["stat-pend"].click();                       // pending on
   check(e.history.calls.at(-1) === "?status=vetoed,pending",
         `URL canonical order vetoed,pending (got ${e.history.calls.at(-1)})`);
-  check(rows(e.els.list) === veto2026 + pendAll, "vetoed+pending count adds up");
+  check(rows(e.els.list) === veto2026 + pend2026, "vetoed+pending count adds up");
 
   e.els["stat-veto"].click();                       // vetoed off
   check(e.history.calls.at(-1) === "?status=pending", `URL ?status=pending (got ${e.history.calls.at(-1)})`);
@@ -243,7 +247,9 @@ console.log("G: popstate re-reads filter state from URL");
   check(pressed(e.els["stat-veto"]) && !pressed(e.els["stat-sign"]) && !pressed(e.els["stat-pend"]),
         "popstate applies ?status=vetoed");
   check(e.waveButtons[2].classList.contains("on"), "popstate applies ?wave=all");
-  check(rows(e.els.list) === veto2025 + veto2026, "all vetoes listed across waves");
+  check(rows(e.els.list) === vetoAll, "all vetoes listed across waves");
+  check(e.els.list.innerHTML.includes('class="row vetoed"'),
+        "vetoed bill rows carry the vetoed outline class");
 }
 
 // ---------- scenario H: invalid params fall back to defaults ----------

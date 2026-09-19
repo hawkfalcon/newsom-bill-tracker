@@ -18,18 +18,24 @@ The status engine uses **two independent sources**, cross-checked:
 | [LegInfo](https://leginfo.legislature.ca.gov) | The official legislative record | **Complete, authoritative** sign/veto status + exact dates |
 | [gov.ca.gov](https://www.gov.ca.gov) | The Governor's own "legislative update" announcements | **First public announcement** (same-day, with veto messages) |
 
-Digital Democracy is **not** used for status — it scrapes LegInfo (so it lags)
-and it displays vetoed bills as "FAILED" with their last action (e.g.
-"Stricken from file") rather than the veto itself. Digital Democracy is used
-only as the rich-detail page each bill links out to.
+Digital Democracy is **not** queried by this repository and is **not** used for
+status — it scrapes LegInfo (so it lags) and it displays vetoed bills as
+"FAILED" with their last action (e.g. "Stricken from file") rather than the
+veto itself. The tracker only generates a Digital Democracy URL for each bill
+as an outbound rich-detail link.
 
 1. **`scripts/fetch_bills.py`** — pulls the current session's full bill list
    from LegInfo, keeps every bill marked as signed, vetoed, or still enrolled
    (awaiting the Governor), then fetches each bill's status page for the exact
    Governor-action date. It also records the latest roll-call result when
    LegInfo provides one and adds the local topic/author enrichment. Author
-   labels link to the matching author filter on Digital Democracy. Outputs
-   `data/bills.json`.
+   labels link to the matching author filter on Digital Democracy. It also
+   keeps a committed `data/leginfo_cache.json`: final signed/vetoed records
+   with unchanged LegInfo search rows and cached full digests are reused on
+   later refreshes, while enrolled bills are still checked for action changes.
+   With `--ai-source`, it writes a transient Gemini input cache from those
+   cached or freshly fetched digests. Use `--refresh-all` when you explicitly
+   want to recheck every bill despite the cache. Outputs `data/bills.json`.
 
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official
    "legislative update" posts from gov.ca.gov's WordPress API and extracts the
@@ -44,15 +50,41 @@ only as the rich-detail page each bill links out to.
    (no server, no build step, no external requests).
 
 4. **`scripts/enrichment.py`** — assigns one or more broad topic labels from
-   the official bill title and Legislative Counsel digest, and matches the
+   the official bill title and Legislative Counsel digest, matches the
    LegInfo author label to `data/legislators.json` for a fuller name, chamber,
-   and district. The classifier is deterministic and nonpartisan; `Other` is
-   used when no clear subject signal is present. The topic labels are useful
-   navigation aids, not official Legislative Counsel subject classifications.
+   and district, and attaches the rules-based plain-English explanation.
+   The classifier is deterministic and nonpartisan; `Other` is used when no
+   clear subject signal is present. Topic labels are navigation aids, not
+   official Legislative Counsel subject classifications.
 
-5. **`.github/workflows/update.yml`** — a GitHub Actions workflow that runs the
-   three data scripts **daily** (and on demand via "Run workflow") and commits
-   the refreshed files back to the repo.
+5. **`scripts/plain_english.py`** — rewrites operative sentences in the
+   official Legislative Counsel digest into a short “In short” explanation.
+   It runs without an LLM, API key, or network request. If the stored excerpt
+   contains only background about existing law, it falls back to a
+   low-confidence topic description instead of inventing a policy change. The
+   original digest excerpt remains available in the expandable source section
+   and the LegInfo link.
+
+6. **`scripts/gemini_enrichment.py`** — an optional offline/batch enrichment
+   pass. It first reduces each full official digest to the operative sentences,
+   exceptions, dates, thresholds, and implementation details most useful for
+   a reader. It then sends up to 20 bills per request, rotates across the
+   configured Gemini models, and gives bills labeled “omnibus” a larger
+   context window plus an explicit multi-provision summary instruction. It
+   requires source evidence in the response and leaves the deterministic
+   result in place when a response fails validation.
+   Accepted and rejected attempts are recorded by official-digest hash, so an
+   unchanged bill is not sent repeatedly on later refreshes. A fallback from
+   the first batch receives one corrective attempt; use `--force` only after
+   intentionally changing the prompt or model. Accepted summaries are stored
+   in `data/bills.json` with their model and source hash; the full digest cache
+   is never embedded in the site.
+
+7. **`.github/workflows/update.yml`** — a GitHub Actions workflow that runs the
+   data scripts **daily** (and on demand via "Run workflow") and commits the
+   refreshed files back to the repo. If the `GEMINI_API_KEY` secret is absent,
+   the workflow remains fully deterministic. The Gemini call is only an
+   enrichment step; the static site has no runtime AI dependency.
 
 ## Digital Democracy links
 
@@ -74,11 +106,14 @@ e.g. LegInfo `202520260AB302` → `ca_202520260ab302` →
    ├── .github/workflows/update.yml
    ├── index.html              # generated (self-contained)
    ├── data/bills.json         # generated (LegInfo + local enrichment)
+   ├── data/leginfo_cache.json # committed incremental LegInfo/digest cache
    ├── data/gov_actions.json   # generated (gov.ca.gov announcements)
    ├── data/legislators.json   # 2025–26 roster used for author display
    ├── scripts/fetch_bills.py
    ├── scripts/fetch_gov_updates.py
    ├── scripts/enrichment.py
+   ├── scripts/plain_english.py
+   ├── scripts/gemini_enrichment.py
    ├── scripts/build_site.py
    └── site/template.html
    ```
@@ -115,7 +150,12 @@ https://<user>.github.io/<repo>/?status=signed,vetoed&wave=all&topic=Housing&q=h
 
 ```bash
 pip install requests
-python scripts/fetch_bills.py --out data/bills.json             # ~2 min
+python scripts/fetch_bills.py --out data/bills.json \
+    --cache data/leginfo_cache.json \
+    --ai-source data/.bill_digest_cache.json                  # faster after first run
+# Optional: GEMINI_API_KEY is read only during this offline refresh step.
+python scripts/gemini_enrichment.py --data data/bills.json \
+    --source data/.bill_digest_cache.json
 python scripts/fetch_gov_updates.py --out data/gov_actions.json # ~10 s
 python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json \
     --template site/template.html --out index.html
@@ -136,6 +176,13 @@ python -m http.server 8000   # then open http://localhost:8000
 - Topic labels are deliberately broad and approximate. They are generated from
   official title/digest text so the method is reviewable and refreshes without
   a third-party classification API.
+- Gemini is used only when the optional `GEMINI_API_KEY` GitHub secret is
+  configured. The refresh job sends selected official digest sentences, not
+  the full bill text, in multi-bill requests. Accepted prose is source-checked,
+  labeled **AI-generated** on the site, and committed as static data; failures
+  fall back to the deterministic explanation. Google’s free tier may use
+  prompts and responses to improve its products, and its limits are
+  project/model dependent.
 - `data/legislators.json` records the official Assembly and Senate roster
   sources used to turn surname-only author labels into full names and chamber/
   district labels. Committee author labels remain unchanged; committee data is
