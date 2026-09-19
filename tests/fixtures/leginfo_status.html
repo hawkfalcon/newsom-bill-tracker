@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head><title>Bill Status (fixture)</title></head>
+<body>
+<!-- Representative billStatusClient page. The parser reads the "…Date:"
+summary labels (each followed by its value span) and the "Last 5 History
+Actions" table. One Date label has an empty value to exercise the
+not-yet-set case. -->
+<div>
+<label class="statusLabel">Chaptered Date:</label>
+<span id="lastAction">09/15/26</span>
+<label class="statusLabel">Vetoed Date:</label>
+<span id="lastAction"></span>
+<label class="statusLabel">Enrolled Date:</label>
+<span id="lastAction">09/02/26</span>
+<label class="statusLabel">Last Amended Date:</label>
+<span id="lastAction">08/18/26</span>
+</div>
+<table>
+<tr>
+<th>Date</th>
+<th>Action</th>
+</tr>
+<tr>
+<td scope="row">09/15/26</td>
+<td>Approved by the Governor. Chaptered, sent to the Legislative Counsel.</td>
+</tr>
+<tr>
+<td scope="row">09/02/26</td>
+<td>Enrolled and presented to the Governor at 3 p.m.</td>
+</tr>
+<tr>
+<td scope="row">08/27/26</td>
+<td>Assembly amendments concurred in. (Ayes 34. Noes 4.)</td>
+</tr>
+<tr>
+<td scope="row">08/26/26</td>
+<td>In Senate. Concurrence in Assembly amendments pending.</td>
+</tr>
+<tr>
+<td scope="row">05/12/26</td>
+<td>Passed Assembly. (Ayes 64. Noes 0.)</td>
+</tr>
+</table>
+</body>
+</html>

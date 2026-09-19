@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests
+        run: pip install -r requirements.txt
 
       - name: Fetch bills from LegInfo
         run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json
@@ -57,6 +57,19 @@ jobs:
       - name: Build static site
         run: python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json --template site/template.html --out index.html
 
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Run page behavior tests
+        run: node tests/page_test.js index.html
+
+      # Fails the run (no commit) when the two sources genuinely disagree.
+      # A fresh announcement whose LegInfo record has not caught up yet
+      # (within 48 h) is a warning, so the normal gov/LegInfo lag never blocks
+      # a refresh — a real data bug does.
+      - name: Cross-check gov.ca.gov against LegInfo
+        run: python scripts/cross_check.py --bills data/bills.json --gov data/gov_actions.json
+
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
@@ -66,6 +79,6 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: refresh bill data ($(date -u +%Y-%m-%d))"
-            git pull --rebase origin "${GITHUB_REF#refs/heads/}" || true
+            git pull --rebase origin "${GITHUB_REF#refs/heads/}"
             git push
           fi

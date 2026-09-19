@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#123a63">
-<meta name="description" content="Every California bill signed or vetoed by Gov. Gavin Newsom in the current 2025–26 legislative session — linked to CalMatters' Digital Democracy.">
+<meta name="description" content="Every California bill signed or vetoed by Gov. Gavin Newsom in the current __SESSION_LABEL__ legislative session — linked to CalMatters' Digital Democracy.">
 <title>Newsom Bill Watch — Signed &amp; Vetoed</title>
 <style>
   :root{
@@ -99,6 +99,7 @@
     border:0;border-radius:inherit;padding:0 13px;background:transparent;color:var(--ink);font:inherit;font-size:.9rem;font-weight:600;
     text-align:left;cursor:pointer}
   .topic-trigger:focus-visible{outline:3px solid var(--blue-soft);outline-offset:-2px}
+  .topic-option.active{background:var(--blue-soft);color:var(--blue)}
   .topic-chevron{width:8px;height:8px;flex:0 0 auto;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
     transform:translateY(-2px) rotate(45deg);transition:transform .12s ease}
   .topic-control.open .topic-chevron{transform:translateY(2px) rotate(225deg)}
@@ -109,7 +110,9 @@
     text-align:left;cursor:pointer}
   .topic-option:hover,.topic-option:focus-visible{background:var(--blue-soft);color:var(--blue);outline:none}
   .topic-option[aria-selected="true"]{background:var(--blue-soft);color:var(--blue);font-weight:700}
-  .topic-state{display:none}
+
+  .gov-note{font-size:.8rem;font-weight:600;color:var(--amber);margin-top:3px;overflow-wrap:anywhere}
+  .gov-note a{color:var(--amber);font-weight:700}
 
   .note{background:var(--blue-soft);border:1px solid #cdd9e8;color:#25456b;border-radius:12px;
     padding:12px 16px;font-size:.88rem;margin:12px 0 4px}
@@ -132,7 +135,6 @@
   .title a{color:var(--ink)}
   .title a:hover{color:var(--blue)}
   .summary{font-size:.86rem;color:#3f3b36;margin-top:5px;overflow-wrap:anywhere}
-  .summary-label{font-weight:800;color:var(--blue)}
   .summary-note{font-size:.72rem;color:var(--muted);font-style:italic}
   .summary-note.ai-note{color:#28734b;font-style:normal;font-weight:700}
   .source-summary{font-size:.76rem;color:var(--muted);margin-top:5px}
@@ -204,7 +206,7 @@
   <div class="wrap">
     <div class="brand">
       <h1>Newsom Bill Watch</h1>
-      <span class="flag">California · 2025–26 session</span>
+      <span class="flag" id="sessionFlag">California · 2025–26 session</span>
     </div>
     <div class="updated">Updated <strong id="updatedAt">—</strong></div>
   </div>
@@ -234,9 +236,7 @@
 
   <div class="controls">
     <div class="waves" id="waves" role="tablist" aria-label="Session wave">
-      <button data-wave="2026" class="on">Now · 2026</button>
-      <button data-wave="2025">2025 wave</button>
-      <button data-wave="all">All session</button>
+      __WAVE_BUTTONS__
     </div>
     <div class="search">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
@@ -247,9 +247,6 @@
         <span id="topicValue">All topics</span><span class="topic-chevron" aria-hidden="true"></span>
       </button>
       <div class="topic-menu" id="topicMenu" role="listbox" aria-label="Filter bills by topic"></div>
-      <select id="topicFilter" class="topic-state" aria-hidden="true" tabindex="-1">
-        <option value="all">All topics</option>
-      </select>
     </div>
     <div class="countnote" id="countnote"></div>
   </div>
@@ -281,9 +278,10 @@
     </div>
     <div style="margin-top:10px">
       Topic labels are approximate, deterministic matches against each bill's official title and digest.
-      “In short” explanations are generated from the official Legislative Counsel digest. Some are optional
-      AI-generated batch enrichments, clearly labeled as such and retained only as secondary explanations;
-      the official digest and LegInfo record remain the source of truth. These are not legal advice.
+      The plain-English explanations below each bill are generated from the official Legislative Counsel
+      digest (summarized, not quoted in full). Some are optional AI-generated batch enrichments, clearly
+      labeled as such and retained only as secondary explanations; the official digest and LegInfo record
+      remain the source of truth. These are not legal advice.
       Author names and chamber/district labels are matched to the 2025–26 legislative roster.
     </div>
     <div style="margin-top:10px">
@@ -312,26 +310,28 @@ const META = {
 
 const bills = (DATA.bills || []).map(b => ({...b}));
 const TOPIC_OPTIONS = DATA.topic_options || ["Agriculture", "Budget", "Economy", "Education", "Energy", "Entertainment", "Environment", "Government", "Health", "Higher Education", "Housing", "Justice", "Labor", "Politics", "Poverty", "Technology", "Transportation", "Other"];
+const TOPICS_WITH_ALL = ["all", ...TOPIC_OPTIONS];
 const topicControlEl = document.getElementById("topicControl");
 const topicTriggerEl = document.getElementById("topicTrigger");
 const topicValueEl = document.getElementById("topicValue");
 const topicMenuEl = document.getElementById("topicMenu");
-const topicFilterEl = document.getElementById("topicFilter");
-topicFilterEl.innerHTML += TOPIC_OPTIONS
-  .map(topicName => `<option value="${esc(topicName)}">${esc(topicName)}</option>`)
-  .join("");
 if (topicMenuEl) {
-  topicMenuEl.innerHTML = TOPIC_OPTIONS
-    .map(topicName => `<button type="button" class="topic-option" role="option" data-topic="${esc(topicName)}" aria-selected="false">${esc(topicName)}</button>`)
+  topicMenuEl.innerHTML = TOPICS_WITH_ALL
+    .map((topicName, i) => `<button type="button" id="topic-opt-${i}" class="topic-option" role="option" data-topic="${esc(topicName)}" aria-selected="false">${topicName === "all" ? "All topics" : esc(topicName)}</button>`)
     .join("");
 }
 
 document.getElementById("updatedAt").textContent = (DATA.generated_at || "").replace("T", " ").replace("Z", " UTC");
+const sessionFlagEl = document.getElementById("sessionFlag");
+if (sessionFlagEl && DATA.session_label) sessionFlagEl.textContent = "California \u00b7 " + DATA.session_label;
 
 const STATUS_ORDER = ["signed", "vetoed", "pending"];
-const WAVE_IDS = ["2025", "2026", "all"];
+// Wave tabs are generated at build time from the data (newest year first),
+// so a new session needs no template edits.
+const WAVE_IDS = Array.isArray(DATA.wave_years) && DATA.wave_years.length
+  ? DATA.wave_years : ["2025", "2026", "all"];
 const DEFAULT_STATUS = ["signed", "vetoed"]; // show signed + vetoed together by default
-const DEFAULT_WAVE = "2026";                 // default to the current calendar-year wave
+const DEFAULT_WAVE = DATA.default_wave || WAVE_IDS[0];
 const CARD_IDS = {vetoed: "stat-veto", signed: "stat-sign", pending: "stat-pend"};
 
 let active = new Set(DEFAULT_STATUS); // which status cards are switched on
@@ -345,6 +345,35 @@ const waveNoteEl = document.getElementById("wavenote");
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => (
     {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+// Keep card explanations skimmable: multi-provision summaries are clipped at
+// a sentence boundary. The full text stays in the data (and search).
+const SUMMARY_MAX_CHARS = 480;
+function clipSummary(text) {
+  text = String(text ?? "");
+  if (text.length <= SUMMARY_MAX_CHARS) return text;
+  const cut = text.slice(0, SUMMARY_MAX_CHARS);
+  const period = cut.lastIndexOf(". ");
+  const space = cut.lastIndexOf(" ");
+  const at = Math.max(period, space);
+  if (at < SUMMARY_MAX_CHARS * 0.5) return cut.trimEnd() + " \u2026";
+  return (period > space ? cut.slice(0, period + 1) : cut.slice(0, space)) + " \u2026";
+}
+
+let topicActiveIndex = 0;
+
+function topicIndexFor(t) {
+  const i = TOPICS_WITH_ALL.indexOf(t);
+  return i >= 0 ? i : 0;
+}
+
+function setTopicActiveIndex(i) {
+  const n = TOPICS_WITH_ALL.length;
+  topicActiveIndex = ((i % n) + n) % n;
+  if (topicTriggerEl) topicTriggerEl.setAttribute("aria-activedescendant", "topic-opt-" + topicActiveIndex);
+  if (topicMenuEl) topicMenuEl.querySelectorAll(".topic-option").forEach((option, idx) =>
+    option.classList.toggle("active", idx === topicActiveIndex));
 }
 
 function syncTopicControl() {
@@ -365,6 +394,7 @@ function openTopicMenu() {
   if (!topicControlEl || !topicTriggerEl) return;
   topicControlEl.classList.add("open");
   topicTriggerEl.setAttribute("aria-expanded", "true");
+  setTopicActiveIndex(topicIndexFor(topic));
 }
 
 /* ---- Shareable filter state in the URL: ?status=signed,vetoed&wave=2026&q=… ---- */
@@ -378,7 +408,6 @@ function readUrl() {
   if (w && WAVE_IDS.includes(w)) wave = w;
   const t = p.get("topic");
   if (t && TOPIC_OPTIONS.includes(t)) topic = t;
-  topicFilterEl.value = topic;
   const q = p.get("q");
   if (q !== null) qEl.value = q;
 }
@@ -402,8 +431,7 @@ function syncUrl() {
 }
 
 function setTopic(value) {
-  topic = TOPIC_OPTIONS.includes(value) ? value : "all";
-  topicFilterEl.value = topic;
+  topic = value === "all" || TOPIC_OPTIONS.includes(value) ? value : "all";
   syncTopicControl();
   closeTopicMenu();
   syncUrl();
@@ -433,22 +461,47 @@ function updateCards() {
   document.getElementById("n-pend").textContent = inWave("pending").length;
 }
 
+function waveStats(year) {
+  const rows = bills.filter(b => b.wave === year);
+  return {
+    vetoed: rows.filter(b => b.status === "vetoed").length,
+    pending: rows.filter(b => b.status === "pending").length,
+  };
+}
+
 function updateWaveNote() {
   if (wave === "all") { waveNoteEl.innerHTML = ""; return; }
-  const v = inWave("vetoed").length;
-  const p = inWave("pending").length;
-  if (wave === "2026") {
-    waveNoteEl.innerHTML = `<div class="note">Newsom is acting on the 2026 bills
-      <strong>right now</strong> — his deadline is <strong>Sept 30, 2026</strong>.
-      So far this wave: <strong>${v} veto${v === 1 ? "" : "es"}</strong>,
-      <strong>${p.toLocaleString()}</strong> bills still awaiting his action.
-      Vetoes typically land in the final days before the deadline
-      (last fall's 123 vetoes all came Oct 1–13).</div>`;
+  const numericWaves = WAVE_IDS.filter(w => w !== "all");
+  const latest = numericWaves[0];
+  const s = waveStats(wave);
+  if (wave === latest) {
+    // The Governor's deadline is always Sept 30 of the session's second year.
+    const deadlineYear = DATA.session_label ? String(DATA.session_label).slice(-4) : latest;
+    let prevNote = "";
+    const prev = numericWaves[1];
+    if (prev) {
+      const pv = bills.filter(b => b.wave === prev && b.status === "vetoed")
+        .map(b => b.action_date).filter(Boolean).sort();
+      if (pv.length) {
+        const fmt = d => fmtDate(d);
+        const range = pv[0] !== pv[pv.length - 1]
+          ? `${fmt(pv[0])}–${fmt(pv[pv.length - 1])}` : fmt(pv[0]);
+        prevNote = ` Vetoes typically land in the final days before the deadline
+          (the ${prev} wave's ${pv.length} all came ${range}).`;
+      }
+    }
+    waveNoteEl.innerHTML = `<div class="note">Newsom is acting on the ${latest} bills
+      <strong>right now</strong> — his deadline is <strong>Sept 30, ${deadlineYear}</strong>.
+      So far this wave: <strong>${s.vetoed} veto${s.vetoed === 1 ? "" : "es"}</strong>,
+      <strong>${s.pending.toLocaleString()}</strong> bills still awaiting his action.${prevNote}</div>`;
     return;
   }
-  waveNoteEl.innerHTML = `<div class="note">The 2025 wave of this two-year session:
-    Newsom acted on these bills by Oct 13, 2025 — including
-    <strong>${v} vetoes</strong>. Use the “Now · 2026” tab
+  const finals = bills.filter(b => b.wave === wave && b.status !== "pending")
+    .map(b => b.action_date).filter(Boolean).sort();
+  const lastAction = finals.length ? fmtDate(finals[finals.length - 1]) : "the end of the session";
+  waveNoteEl.innerHTML = `<div class="note">The ${wave} wave of this two-year session:
+    Newsom acted on these bills by ${lastAction} — including
+    <strong>${s.vetoed} veto${s.vetoed === 1 ? "" : "es"}</strong>. Use the “Now · ${latest}” tab
     for what's happening today.</div>`;
 }
 
@@ -465,7 +518,9 @@ function authorDDUrl(b) {
   const name = info && info.name ? info.name : b.author;
   if (!name) return null;
   const author = encodeURIComponent(name).replace(/%20/g, "+");
-  return `https://calmatters.digitaldemocracy.org/bills#author=${author}&session_year%5B%5D=2025-2026`;
+  // "20252026" -> "2025-2026" so author links follow the session.
+  const session = String(DATA.session || "").replace(/^(\d{4})(\d{4})$/, "$1-$2");
+  return `https://calmatters.digitaldemocracy.org/bills#author=${author}&session_year%5B%5D=${session}`;
 }
 
 function authorMarkup(b) {
@@ -484,7 +539,7 @@ function rowHTML(b) {
     : "";
   const summaryText = b.plain_summary || b.summary;
   const summary = summaryText
-    ? `<div class="summary"><span class="summary-label">In short:</span> ${esc(summaryText)}${confidenceNote}</div>`
+    ? `<div class="summary">${esc(clipSummary(summaryText))}${confidenceNote}</div>`
     : "";
   const officialDigest = b.official_digest_excerpt || b.summary || "";
   const sourceSummary = officialDigest && officialDigest !== b.plain_summary
@@ -503,14 +558,20 @@ function rowHTML(b) {
   const topicChips = (b.topics || []).map(t => `<span class="chip topic">${esc(t)}</span>`).join("");
   const chips = `<span class="chip ${m.chip}">${m.label}</span>${topicChips}`;
 
-  const vetoMsg = (b.status === "vetoed" && b.gov_msg_url)
+  // While LegInfo lags, the Governor's own announcement is still public: say
+  // so explicitly instead of silently showing "Awaiting action".
+  const govNote = (b.status === "pending" && b.gov_action)
+    ? `<div class="gov-note">Governor's office announced: ${b.gov_action === "vetoed" ? "vetoed" : "signed"} ${fmtDate(b.gov_date)} — official LegInfo record pending.</div>`
+    : "";
+
+  const vetoMsg = ((b.status === "vetoed" || (b.status === "pending" && b.gov_action === "vetoed")) && b.gov_msg_url)
     ? `<a class="ext gov" href="${esc(b.gov_msg_url)}" target="_blank" rel="noopener" title="Governor's veto message (PDF)">Veto letter</a>`
     : "";
 
   return `
     <div class="row ${m.chip}">
       <div class="measure">${esc(b.measure)}</div>
-      <div class="content">${subject}${summary}${sourceSummary}${meta}<div class="chips">${chips}</div></div>
+      <div class="content">${subject}${summary}${sourceSummary}${meta}${govNote}<div class="chips">${chips}</div></div>
       <div class="side">
         <div class="date">${fmtDate(b.action_date)}</div>
         <div class="links">
@@ -584,22 +645,52 @@ for (const s of STATUS_ORDER) {
 }
 document.querySelectorAll("#waves button").forEach(b =>
   b.addEventListener("click", () => setWave(b.dataset.wave)));
-qEl.addEventListener("input", () => { syncUrl(); render(); });
-topicFilterEl.addEventListener("change", () => setTopic(topicFilterEl.value));
+// Debounced: each keystroke re-renders up to a few thousand rows.
+let qTimer = null;
+qEl.addEventListener("input", () => {
+  if (qTimer) clearTimeout(qTimer);
+  qTimer = setTimeout(() => { syncUrl(); render(); }, 150);
+});
 if (topicTriggerEl && topicMenuEl) {
   topicTriggerEl.addEventListener("click", () => {
     if (topicControlEl.classList.contains("open")) closeTopicMenu();
     else openTopicMenu();
   });
   topicTriggerEl.addEventListener("keydown", e => {
-    if (e.key === "Escape") closeTopicMenu();
+    const open = topicControlEl.classList.contains("open");
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) openTopicMenu();
+      else setTopicActiveIndex(topicActiveIndex + (e.key === "ArrowDown" ? 1 : -1));
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (open) setTopic(TOPICS_WITH_ALL[topicActiveIndex]);
+      else openTopicMenu();
+    } else if (e.key === "Escape") {
+      closeTopicMenu();
+    }
   });
   topicMenuEl.addEventListener("click", e => {
     const option = e.target.closest(".topic-option");
-    if (option) setTopic(option.dataset.topic);
+    if (option) {
+      setTopicActiveIndex(topicIndexFor(option.dataset.topic));
+      setTopic(option.dataset.topic);
+    }
   });
   topicMenuEl.addEventListener("keydown", e => {
-    if (e.key === "Escape") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setTopicActiveIndex(topicActiveIndex + (e.key === "ArrowDown" ? 1 : -1));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setTopicActiveIndex(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setTopicActiveIndex(TOPICS_WITH_ALL.length - 1);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setTopic(TOPICS_WITH_ALL[topicActiveIndex]);
+    } else if (e.key === "Escape") {
       closeTopicMenu();
       topicTriggerEl.focus();
     }
@@ -612,7 +703,6 @@ if (document.addEventListener && topicControlEl) {
 }
 
 function applyState() {
-  topicFilterEl.value = topic;
   syncTopicControl();
   syncWaveButtons();
   updateCards();

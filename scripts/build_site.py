@@ -18,6 +18,17 @@ from datetime import datetime, timezone
 from enrichment import enrich_payload
 
 
+def wave_buttons(years, default_year):
+    """Render the wave tab buttons: newest year first, 'All session' last."""
+    out = []
+    for i, year in enumerate(years):
+        label = f"Now \u00b7 {year}" if i == 0 else f"{year} wave"
+        cls = " on" if year == default_year else ""
+        out.append(f'<button data-wave="{year}" class="{cls.strip()}">{label}</button>')
+    out.append('<button data-wave="all">All session</button>')
+    return "\n      ".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/bills.json")
@@ -59,21 +70,41 @@ def main():
             b["gov_post_id"] = gov[k].get("post_id")
             b["gov_published_at"] = gov[k].get("published_at")
             b["gov_modified_at"] = gov[k].get("modified_at")
+            # For pending bills this is the announced action (signed/vetoed)
+            # while LegInfo has not caught up; the site shows it explicitly.
+            b["gov_action"] = gov[k]["action"]
         else:
             b["gov_url"] = None
             b["gov_date"] = None
             b["gov_msg_url"] = None
+            b["gov_action"] = None
         # Two-year session = two waves of Governor action. Assign each bill to
         # the calendar year its action took place (or its enrolled year while
         # still pending).
         d = b.get("action_date") or ""
         b["wave"] = d[:4] if d else None
 
+    # Wave tabs are derived from the data so a new session does not need
+    # template edits: newest action year first, "All session" always last.
+    years = sorted(
+        {b["wave"] for b in data.get("bills", []) if b.get("wave")},
+        reverse=True,
+    )
+    default_year = years[0] if years else str(
+        datetime.now(timezone.utc).year
+    )
+    data["wave_years"] = years + ["all"]
+    data["default_wave"] = default_year
+
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     # Escape "<" so no "</script>" sequence can appear inside the inline JSON.
     payload = payload.replace("<", "\\u003c")
     # Inject the JSON object literal in place of the placeholder.
     html = tpl.replace("__DATA_JSON__", payload)
+    html = html.replace("__WAVE_BUTTONS__", wave_buttons(years, default_year))
+    html = html.replace(
+        "__SESSION_LABEL__", data.get("session_label") or ""
+    )
     html = html.replace("__BUILD_TIME__",
                         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
 
@@ -83,7 +114,7 @@ def main():
     counts = data.get("counts", {})
     print(f"Built {args.out} — signed={counts.get('signed', 0)} "
           f"vetoed={counts.get('vetoed', 0)} pending={counts.get('pending', 0)} "
-          f"({len(html) // 1024} KB)")
+          f"waves={','.join(data['wave_years'])} ({len(html) // 1024} KB)")
 
 
 if __name__ == "__main__":
