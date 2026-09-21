@@ -41,6 +41,13 @@ VETOED_MARKER = re.compile(
     re.I,
 )
 
+# Also match more casual “signs bill” / “signs new laws” phrasing that appears
+# in press‑release titles or bodies without the “signed the following” wording.
+SIGN_BILL_RE = re.compile(
+    r"(?:signs?\s+bill|signs?\s+new\s+laws|signs?\s+legislation)",
+    re.I,
+)
+
 # Matches batch action titles used by the Governor's press office, e.g.:
 # "Governor Newsom signs legislation 9.14.2026"
 # "Governor Newsom signs legislation 7.6.26"
@@ -232,7 +239,7 @@ def parse_post(post):
     sm = SIGNED_MARKER.search(content)
     vm = VETOED_MARKER.search(content)
 
-    if not has_title_match and not sm and not vm:
+    if not has_title_match and not sm and not vm and not SIGN_BILL_RE.search(content):
         return {}
 
     signed_html = ""
@@ -251,6 +258,8 @@ def parse_post(post):
         vetoed_html = content[vm.end():]
     elif "veto" in title_clean.lower():
         vetoed_html = content
+    elif SIGN_BILL_RE.search(content):
+        signed_html = content
     else:
         signed_html = content
 
