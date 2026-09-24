@@ -302,6 +302,17 @@ const fmtDate = s => {
   return dt.toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"});
 };
 
+// The date a row should show: the latest of the two sources' dates. While
+// LegInfo lags the Governor's announcement (the amber "official LegInfo
+// record pending" note), the announced date is the newest fact we have and
+// wins; once LegInfo catches up, its official date is the same or later and
+// wins on its own. ISO dates compare correctly as strings.
+function effDate(b) {
+  const leginfo = b.action_date || "";
+  const gov = (b.gov_date && b.gov_action) ? b.gov_date : "";
+  return gov > leginfo ? gov : leginfo;
+}
+
 const META = {
   vetoed:  {chip:"vetoed",  label:"Vetoed"},
   signed:  {chip:"signed",  label:"Signed"},
@@ -446,12 +457,14 @@ function waveBills() {
 }
 function inWave(status) {
   const rows = waveBills().filter(b => b.status === status);
-  rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
+  // Newest effective date first so freshly announced actions (even while
+  // LegInfo is still pending) bubble to the top of the list.
+  rows.sort((a, b) => effDate(b).localeCompare(effDate(a)));
   return rows;
 }
 function visibleBills() {
   const rows = waveBills().filter(b => active.has(b.status));
-  rows.sort((a, b) => (b.action_date || "").localeCompare(a.action_date || ""));
+  rows.sort((a, b) => effDate(b).localeCompare(effDate(a)));
   return rows;
 }
 
@@ -573,7 +586,7 @@ function rowHTML(b) {
       <div class="measure">${esc(b.measure)}</div>
       <div class="content">${subject}${summary}${sourceSummary}${meta}${govNote}<div class="chips">${chips}</div></div>
       <div class="side">
-        <div class="date">${fmtDate(b.action_date)}</div>
+        <div class="date">${fmtDate(effDate(b))}</div>
         <div class="links">
           ${b.gov_url ? `<a class="ext gov" href="${esc(b.gov_url)}" target="_blank" rel="noopener" title="Governor's official announcement (gov.ca.gov)">Gov ↗</a>` : ""}
           ${vetoMsg}

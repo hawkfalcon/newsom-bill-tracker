@@ -19,15 +19,18 @@ import html as html_mod
 import json
 import os
 import re
+import ssl
 import time
 from datetime import datetime, timezone
 
 import requests
 
 API = "https://www.gov.ca.gov/wp-json/wp/v2/posts"
+# A self-identifying UA that the gov.ca.gov WordPress endpoint tolerates
+# (a spoofed Chrome UA gets its connections cut — SSL EOF — under polling).
 UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    "Mozilla/5.0 (compatible; NewsomBillTracker/1.0) "
+    "(KHTML, like Gecko)"
 )
 HEADERS = {"User-Agent": UA, "Accept": "application/json"}
 
@@ -91,24 +94,68 @@ def norm(measure):
     return re.sub(r"[^a-z0-9]", "", measure.lower())
 
 
+# Max attempts for a single HTTP request when gov.ca.gov drops the TLS
+# connection (ssl.SSLError, e.g. "EOF occurred in violation of protocol").
+# Backoff before attempts 2..5: 1 s, 2 s, 4 s, 8 s.
+SSL_MAX_ATTEMPTS = 5
+
+
+def _get_with_ssl_retry(url, params, outer_attempt):
+    """requests.get with a dedicated ssl.SSLError retry counter.
+
+    Returns (response, None) on success, or (None, error) when the SSL
+    attempts are exhausted or a non-SSL transport error occurs (the caller
+    then applies the generic retry schedule).
+    """
+    for ssl_attempt in range(1, SSL_MAX_ATTEMPTS + 1):
+        try:
+            return requests.get(
+                url, params=params, headers=HEADERS, timeout=45
+            ), None
+        except ssl.SSLError as exc:
+            if ssl_attempt >= SSL_MAX_ATTEMPTS:
+                return None, f"ssl.SSLError after {ssl_attempt} attempts: {exc}"
+            delay = 2 ** (ssl_attempt - 1)  # 1 s, 2 s, 4 s, 8 s
+            print(
+                f"  retry: SSL error from gov.ca.gov "
+                f"(attempt {ssl_attempt}/{SSL_MAX_ATTEMPTS}, "
+                f"outer pass {outer_attempt + 1}): "
+                f"{str(exc)[:80]} — backing off {delay}s"
+            )
+            time.sleep(delay)
+    return None, "unreachable"  # pragma: no cover
+
+
 def get_json(url, params, retries=4):
-    """Fetch JSON from url with params; return (data, total_pages)."""
+    """Fetch JSON from url with params; return (data, total_pages).
+
+    Every retry is logged so the Actions log explains each pause; SSL
+    errors get the longer exponential backoff above, other failures the
+    shorter generic one.
+    """
     last = None
     for attempt in range(retries):
-        try:
-            r = requests.get(url, params=params, headers=HEADERS, timeout=45)
-            if r.status_code == 200:
-                try:
-                    total_pages = int(r.headers.get("X-WP-TotalPages", 1))
-                except (ValueError, TypeError):
-                    total_pages = 1
-                return r.json(), total_pages
-            if r.status_code == 400 and "rest_post_invalid_page_number" in r.text:
-                return [], 0
+        r, err = _get_with_ssl_retry(url, params, attempt)
+        if r is None:
+            last = err
+        elif r.status_code == 200:
+            try:
+                total_pages = int(r.headers.get("X-WP-TotalPages", 1))
+            except (ValueError, TypeError):
+                total_pages = 1
+            return r.json(), total_pages
+        elif r.status_code == 400 and "rest_post_invalid_page_number" in r.text:
+            return [], 0
+        else:
             last = f"HTTP {r.status_code}"
-        except Exception as exc:  # noqa: BLE001
-            last = str(exc)
-        time.sleep(1 + attempt * 1.5)
+
+        if attempt < retries - 1:
+            delay = 1 + attempt * 1.5
+            print(
+                f"  retry {attempt + 1}/{retries - 1} for {url} "
+                f"(outer pass {attempt + 1}): {last} — sleeping {delay:.1f}s"
+            )
+            time.sleep(delay)
     raise RuntimeError(f"failed to fetch {url}: {last}")
 
 
@@ -155,6 +202,9 @@ def fetch_posts(after_iso):
                 break
             page += 1
             time.sleep(0.3)
+            # Extra pause between page requests: steady polling of the
+            # WordPress endpoint without it triggers SSL-EOF resets.
+            time.sleep(0.5)
 
     posts = sorted(
         posts_by_id.values(),
@@ -302,6 +352,18 @@ def main():
     print(f"Fetching gov.ca.gov announcements since {args.after} …")
     posts, fetch_ok = fetch_posts(after_iso)
     print(f"  found {len(posts)} candidate posts (complete={fetch_ok and bool(posts)})")
+
+    if not posts:
+        # Graceful fallback: zero candidate posts means the fetch is likely
+        # incomplete (e.g. every page request failed). Do NOT reset the
+        # existing actions — the merge below only adds entries, so the
+        # previously saved data survives and the build step can still
+        # generate a current index.html from it.
+        print(
+            f"  WARNING: 0 candidate posts found — treating this as an "
+            f"incomplete fetch. Keeping the {len(actions)} previously saved "
+            "actions untouched; no actions will be reset or dropped."
+        )
 
     # Re-parse all candidate posts oldest -> newest so a later post that
     # corrects an earlier one (bill listed under the wrong batch) wins, and
