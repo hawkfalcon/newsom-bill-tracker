@@ -39,18 +39,28 @@ as an outbound rich-detail link.
    cached or freshly fetched digests. Use `--refresh-all` when you explicitly
    want to recheck every bill despite the cache. Outputs `data/bills.json`.
 
+   A bill vetoed in the last days of the session goes back to its house of
+   origin, so LegInfo's search row flips from `Vetoed` to `In Senate`/
+   `In Assembly` ("Consideration of Governor's veto pending") and the bill would
+   disappear from the snapshot. Bills in that state — plus any measure the
+   Governor's office announced, via `--gov` — are re-read from their own LegInfo
+   status/history pages, which still record the veto, so a signed or vetoed bill
+   never vanishes quietly (and the log says so if one ever does).
+
 2. **`scripts/fetch_gov_updates.py`** — pulls the Governor's official
    "legislative update" posts from gov.ca.gov's WordPress API and extracts the
    signed/vetoed bill lists with links to each signing/veto message. Outputs
    `data/gov_actions.json`. A bill is only recorded when its code starts a
    list entry or line; a bill number that appears merely as a link inside
    press-release prose (a cross-reference to an older signing post) is
-   ignored, so commentary posts can't fabricate actions. When a complete
-   re-fetch succeeds, actions are rebuilt from the posts so stale entries
-   self-heal on the next run; an incomplete fetch only adds to the previous
-   file. Cross-checked against LegInfo by `scripts/cross_check.py`: for the
-   2025–26 session the two sources agree on all **123 vetoes** with zero
-   disagreements.
+   ignored, so commentary posts can't fabricate actions. So are whole recap
+   lists — the "Last year / In 2024, Governor Newsom signed:" blocks that
+   narrative releases use to list an *earlier* session's bills, whose measure
+   numbers otherwise look like fresh actions. When a complete re-fetch
+   succeeds, actions are rebuilt from the posts so stale entries self-heal on
+   the next run; an incomplete fetch only adds to the previous file.
+   Cross-checked against LegInfo by `scripts/cross_check.py`, which reports no
+   disagreements for the 2025–26 session's vetoes and signings.
 
 3. **`scripts/cross_check.py`** — independent validation between the two
    sources: every gov.ca.gov action must match a LegInfo bill's status, and
@@ -186,6 +196,7 @@ https://<user>.github.io/<repo>/?status=signed,vetoed&wave=all&topic=Housing&q=h
 pip install -r requirements.txt
 python scripts/fetch_bills.py --out data/bills.json \
     --cache data/leginfo_cache.json \
+    --gov data/gov_actions.json \
     --ai-source data/.bill_digest_cache.json                  # faster after first run
 # Optional: GEMINI_API_KEY is read only during this offline refresh step.
 python scripts/gemini_enrichment.py --data data/bills.json \
@@ -204,10 +215,12 @@ python -m unittest discover -s tests -p "test_*.py"   # parser + logic unit test
 node tests/page_test.js index.html                     # site behavior (no browser needed)
 ```
 
-The unit tests cover the LegInfo HTML parsers (with saved fixtures), the
-gov.ca.gov post parser — including the rule that press-release prose
-cross-references are not treated as bill actions — the cache and
-enrichment logic, and the merge/cross-check code. The page test loads the
+The unit tests cover the LegInfo HTML parsers (with saved fixtures), including
+recovery of a vetoed bill whose LegInfo search row reads as floor process again,
+the gov.ca.gov post parser — including the rules that press-release prose
+cross-references and "In 2024, Governor Newsom signed:" recap lists are not
+treated as bill actions — the cache and enrichment logic, and the merge and
+cross-check code. The page test loads the
 built `index.html` in a minimal DOM stub and exercises the filters, wave
 tabs, topic menu (keyboard included), search, and the gov-announcement
 note. The CI job runs both before committing refreshed data.
@@ -221,7 +234,9 @@ note. The CI job runs both before committing refreshed data.
   releases. The parser captures both, but only when a bill number appears
   as a list entry or at line start; bill codes that appear only as inline
   cross-reference links to older announcements in press-release prose are
-  ignored, so commentary about past signing waves cannot fabricate actions.
+  ignored, and so are whole recap lists (the "Last year, Governor Newsom
+  signed:" blocks that reuse the announcement markup for an earlier session's
+  bills), so commentary about past signing waves cannot fabricate actions.
   A bill signed on a day the office posts nothing has no Gov link. LegInfo
   is the complete record and the status source of truth either way.
 - **"Awaiting action"** = bills LegInfo lists as still enrolled. During the

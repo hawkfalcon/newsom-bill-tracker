@@ -73,6 +73,133 @@ BILL_PATTERN = re.compile(
 )
 
 
+# --- background recaps ------------------------------------------------------
+# Narrative press releases repeat the markup of a real bill list for *earlier*
+# rounds of action, e.g. the 9.19.26 election-protection post:
+#     <h2>The election protection and pro-democracy bill package</h2>
+#     <ul><li><strong>AB 282 (Pellerin)</strong>– Makes it a felony …</li>…</ul>
+#     …
+#     <p>In 2024, Governor Newsom <a …>signed</a>:</p>
+#     <ul><li><strong>AB 2839 (Pellerin)</strong> — expands the timeframe …</li>
+#         <li><strong>AB 2355 (Carrillo)</strong> — requires …</li></ul>
+# Those last bills were signed in an earlier session, but their measure numbers
+# look identical here — so they became phantom "signed 2026-09-19" actions that
+# no LegInfo bill can ever match (that is what failed the cross-check).
+#
+# A run of bill entries is treated as background when the text introducing it
+# points at past action ("last year", "in 2024", "previously", "builds on" …)
+# while naming a signing/veto verb, and is not itself an announcement line
+# ("he has signed the following bills").
+HISTORICAL_INTRO_RE = re.compile(
+    r"\blast\s+(?:year|session|month|week|term)\b"
+    r"|\bearlier\s+(?:this\s+(?:year|session)|that\s+year|in\s+\d{4}|back)\b"
+    r"|\bback\s+in\s+(?:19|20)\d\d\b"
+    r"|\b(?:in|since|during)\s+(?:19|20)\d\d\b"
+    r"|\bprevious(?:ly)?\b"
+    r"|\bprior\s+(?:session|year|term)\b"
+    r"|\bthe\s+year\s+before\b"
+    r"|\b(?:record|legacy|history)\s+of\b"
+    r"|\bbuilds?\s+on\b",
+    re.I,
+)
+RECAP_VERB_RE = re.compile(r"\b(sign\w*|veto\w*|approv\w*|enact\w*|chapter\w*)\b", re.I)
+
+# List items and their stand-ins ("</li>-only" lines, Divi paragraphs) end at
+# one of these tags, so splitting there yields one entry per piece.
+ENTRY_BOUNDARY_RE = re.compile(r"</li>|</p>|</h[1-6]>|<br\s*/?>|</div>", re.I)
+# A bill entry starts with the measure code (after any bullet/numbering and
+# inline markup); prose that merely mentions a bill does not.
+BILL_ENTRY_RE = re.compile(
+    r"^\s*(?:[\u2022\u2023\u25E6\u2043\u2219\*\-–—•]\s*)?"
+    r"(?:\d{1,2}[.)]\s*)?"
+    r"(?:AB|SB|ACA|SCA|AJR|SJR|ACR|SCR|HR|SR|ABX\d+|SBX\d+)\s*[-\s\u2011]?\d+\b",
+    re.I,
+)
+
+
+def _entry_segments(text):
+    """Split post HTML into list-item-ish segments, keeping offsets.
+
+    Each segment is (start, end, raw_html, plain_text); plain_text has tags
+    removed and whitespace collapsed, which is what the entry/intro tests read.
+    """
+    bounds = sorted({0, *(m.end() for m in ENTRY_BOUNDARY_RE.finditer(text)), len(text)})
+    segments = []
+    for start, end in zip(bounds, bounds[1:]):
+        if end <= start:
+            continue
+        raw = text[start:end]
+        plain = re.sub(r"\s+", " ", html_mod.unescape(re.sub(r"<[^>]+>", " ", raw))).strip()
+        segments.append((start, end, raw, plain))
+    return segments
+
+
+def background_list_spans(text):
+    """Return [(start, end, [measures])] for bill lists that recap past action."""
+    segments = _entry_segments(text)
+    is_entry = [
+        bool(plain) and bool(BILL_ENTRY_RE.match(plain)) for _, _, _, plain in segments
+    ]
+
+    spans = []
+    i = 0
+    while i < len(segments):
+        if not is_entry[i]:
+            i += 1
+            continue
+        j = i
+        # A run continues across bill entries and the blank/markup-only
+        # segments between them, but stops at real prose.
+        while True:
+            k = j + 1
+            while k < len(segments) and not segments[k][3] and not is_entry[k]:
+                k += 1
+            if k < len(segments) and is_entry[k]:
+                j = k
+            else:
+                break
+
+        intro = " ".join(
+            plain for _, _, _, plain in
+            [s for s in segments[:i] if s[3]][-2:]
+        )
+        if (
+            intro
+            and HISTORICAL_INTRO_RE.search(intro)
+            and RECAP_VERB_RE.search(intro)
+            and not SIGNED_MARKER.search(intro)
+            and not VETOED_MARKER.search(intro)
+        ):
+            measures = [
+                re.match(BILL_ENTRY_RE, plain).group(0).strip()
+                for _, _, _, plain in (segments[x] for x in range(i, j + 1))
+                if plain
+            ]
+            spans.append((segments[i][0], segments[j][1], measures))
+        i = j + 1
+    return spans
+
+
+def strip_background_lists(text):
+    """Blank out bill lists that recap an earlier round of action.
+
+    Returns (cleaned_text, [dropped measures]).
+    """
+    spans = background_list_spans(text)
+    if not spans:
+        return text, []
+    dropped = []
+    out = []
+    cursor = 0
+    for start, end, measures in spans:
+        out.append(text[cursor:start])
+        out.append(" ")
+        cursor = end
+        dropped.extend(measures)
+    out.append(text[cursor:])
+    return "".join(out), sorted(set(dropped))
+
+
 def anchor_href_before(text, pos, lookback=600):
     """If the position is inside an <a> tag, return that anchor's href."""
     seg = text[max(0, pos - lookback):pos]
@@ -282,6 +409,14 @@ def parse_post(post):
     content = post.get("content", {}).get("rendered", "")
     date = post.get("date", "")[:10]
     url = post.get("link", "")
+
+    # Recaps of earlier signing rounds ("Last year, Governor Newsom signed:"
+    # followed by a list of prior-session bills) are not this post's action.
+    content, dropped = strip_background_lists(content)
+    if dropped:
+        print(f"  note: {date} '{title_clean[:52]}…' recaps "
+              f"{len(dropped)} earlier-session bill(s), not actions: "
+              f"{', '.join(dropped[:10])}{' …' if len(dropped) > 10 else ''}")
 
     # Post must look like a legislative update / bill action announcement:
     # either by title match or by containing explicit signed/vetoed markers.

@@ -14,8 +14,16 @@ LegInfo is the official source of truth for the three states tracked here:
   - vetoed by the Governor
   - enrolled and on the Governor's desk (pending)
 
+LegInfo's search table labels a bill by where it sits in the Legislature, not by
+what the Governor did to it, so a bill whose veto the house has not disposed of
+yet reads as "In Senate" again and would silently drop out of the snapshot.
+Those bills are re-read from their own LegInfo status/history pages (see section
+2b); --gov data/gov_actions.json widens the set to bills the Governor's office
+announced but the previous snapshot had already lost.
+
 Usage:
     python scripts/fetch_bills.py [--session 20252026] [--workers 8] [--limit N]
+                                  [--gov data/gov_actions.json]
 """
 
 import argparse
@@ -436,11 +444,123 @@ def extract_summary(digest_html, title):
 
 
 # --------------------------------------------------------------------------
-# Incremental cache helpers
+# 2b. Bills LegInfo no longer labels as being at the Governor's desk
 # --------------------------------------------------------------------------
+# LegInfo's search row reports where a bill sits *in the Legislature*, not what
+# the Governor did to it.  A bill vetoed late in the session is returned to its
+# house of origin, so its row flips from "Vetoed" back to an in-process label
+# ("In Senate") while its history gains the line
+#     "In Senate. Consideration of Governor's veto pending."
+# Classifying from the search row alone would then silently drop a veto this
+# tracker had already recorded — the bill disappears from the site and the
+# cross-check reports it as absent from bills.json.  Such bills are re-read
+# from their own LegInfo record, which still shows the Governor's action.
+TRACKED_KINDS = {"signed", "vetoed", "pending"}
 FINAL_KINDS = {"signed", "vetoed"}
 
 
+def kind_from_leginfo_record(summary, history):
+    """Classify a bill from its LegInfo status/history rows (not the search row).
+
+    Returns "signed", "vetoed", or None when the record shows no Governor
+    action — i.e. the bill genuinely is back in the ordinary floor process.
+    The date fields lag a new veto, so the action lines decide.
+    """
+    text = " | ".join(action.lower() for _, action in history)
+    if summary.get("vetoed_date") or "vetoed by" in text:
+        return "vetoed"
+    if summary.get("signed_date") or "approved by the governor" in text:
+        return "signed"
+    return None
+
+
+def norm_measure_label(measure):
+    """'SB 632' / 'SB-632' / 'ABX1 2' -> 'sb632' / 'abx12' (cross-check key form)."""
+    return re.sub(r"[^a-z0-9]", "", (measure or "").lower())
+
+
+def announced_measures(path):
+    """{normalized measure: action} for every signing/veto the Governor posted.
+
+    Read from data/gov_actions.json, which the refresh job has on disk from the
+    previous run.  It is a second, independent statement that a bill reached the
+    desk, so a bill this snapshot has *already* lost can still be recovered.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            actions = json.load(f).get("actions", {})
+    except (OSError, ValueError, TypeError):
+        return {}
+    out = {}
+    for key, action in actions.items():
+        if not isinstance(action, dict) or action.get("action") not in FINAL_KINDS:
+            continue
+        measure = norm_measure_label(action.get("measure") or "") or key
+        out[norm_measure_label(measure)] = action["action"]
+    return out
+
+
+def offlisted_desk_bills(bills, previous, announced=None):
+    """Search rows that dropped off the desk list but that we still track.
+
+    A row qualifies when its bill_id was signed / vetoed / pending in the last
+    snapshot, or the Governor's office announced an action for that measure.
+    Every other row the classifier ignores is simply a bill that is not at the
+    Governor's desk.
+    """
+    prior_ids = {
+        str(bill_id)
+        for bill_id, record in previous.items()
+        if isinstance(record, dict) and record.get("status") in TRACKED_KINDS
+    }
+    announced = announced or {}
+    return [
+        bill for bill in bills
+        if classify(bill["status"]) is None
+        and (
+            str(bill["bill_id"]) in prior_ids
+            or norm_measure_label(bill.get("measure", "")) in announced
+        )
+    ]
+
+
+def confirm_offlisted_kind(bill, previous_kind):
+    """Recover the status of a bill whose LegInfo search row moved on.
+
+    Returns ``(kind, note)``.  ``kind`` is "signed"/"vetoed" when LegInfo's own
+    record still shows the Governor's action, None when it shows none (the bill
+    really came back off the desk), and ``previous_kind`` when LegInfo could
+    not be read — a failed request is not evidence that the veto did not
+    happen, so the last known terminal status is kept and the reason reported.
+    """
+    bill_id = str(bill["bill_id"])
+    try:
+        summary, history = parse_status_page(fetch_status_page(bill_id))
+    except Exception as exc:  # noqa: BLE001 - fall back to the saved record
+        return (
+            previous_kind if previous_kind in FINAL_KINDS else None,
+            f"status page unreadable ({str(exc)[:90]}); kept {previous_kind}",
+        )
+
+    kind = kind_from_leginfo_record(summary, history)
+    if kind is not None:
+        return kind, None
+
+    # The "last 5" window can miss an older Governor action; read the full
+    # action history before giving up on the bill.
+    try:
+        kind = kind_from_leginfo_record({}, parse_history_rows(fetch_history_page(bill_id)))
+    except Exception as exc:  # noqa: BLE001 - fall back to the saved record
+        return (
+            previous_kind if previous_kind in FINAL_KINDS else None,
+            f"history page unreadable ({str(exc)[:90]}); kept {previous_kind}",
+        )
+    return kind, None
+
+
+# --------------------------------------------------------------------------
+# Incremental cache helpers
+# --------------------------------------------------------------------------
 def normalize_measure(measure):
     measure = measure or ""
     return measure.replace("-", " ") if re.fullmatch(r"[A-Za-z]+-\d+", measure) else measure
@@ -545,6 +665,12 @@ def main():
         default="data/leginfo_cache.json",
         help="persist fetched final-bill records and full digests for incremental refreshes",
     )
+    ap.add_argument(
+        "--gov",
+        default="data/gov_actions.json",
+        help="Governor's-office actions from the previous run; measures listed "
+             "here are re-read from LegInfo even when the search row dropped them",
+    )
     ap.add_argument("--out", default="data/bills.json")
     args = ap.parse_args()
 
@@ -599,12 +725,42 @@ def main():
             "avoid writing incomplete data.")
         sys.exit(1)
 
+    # A LegInfo search row can drop a bill whose Governor action this tracker
+    # already recorded (a veto returned to its house for consideration, see
+    # section 2b).  Re-read those bills' own LegInfo records so the bill stays
+    # in the snapshot instead of silently vanishing from the site.  The
+    # Governor's announcements select which bills to re-check; LegInfo's record
+    # always decides the status, so the two sources stay independent.
+    recovered = {}
+    offlisted = offlisted_desk_bills(bills, previous, announced_measures(args.gov))
+    if offlisted:
+        log(f"  {len(offlisted)} bills LegInfo no longer labels as being at the "
+            "Governor's desk — rechecking their own LegInfo records …")
+        with ThreadPoolExecutor(
+            max_workers=min(max(args.workers, 1), len(offlisted))
+        ) as ex:
+            checks = list(ex.map(lambda bill: confirm_offlisted_kind(
+                bill, (previous.get(str(bill["bill_id"])) or {}).get("status")
+            ), offlisted))
+        for bill, (kind, note) in zip(offlisted, checks):
+            if note:
+                log(f"  note: {normalize_measure(bill['measure'])}: {note}")
+            if kind in TRACKED_KINDS:
+                recovered[str(bill["bill_id"])] = kind
+        log(f"  {len(recovered)} of them still show a Governor action on LegInfo "
+            "and are kept")
+
     targets = []
     reused = {}
     for bill in bills:
         kind = classify(bill["status"])
         if kind is None:
-            continue
+            kind = recovered.get(str(bill["bill_id"]))
+            if kind is None:
+                continue
+            # Fetch as if the row still read the official status label; the
+            # cache keeps the *real* row so the next run rechecks it.
+            bill = {**bill, "status": LEGINFO_STATUS_BY_KIND[kind]}
         bid = str(bill["bill_id"])
         cached = cache_bills.get(bid, {})
         # v2 caches no record copy; the last bills.json is the store of
@@ -628,7 +784,10 @@ def main():
         else:
             targets.append(bill)
 
-    governor_count = sum(1 for bill in bills if classify(bill["status"]) is not None)
+    governor_count = sum(
+        1 for bill in bills
+        if classify(bill["status"]) is not None or str(bill["bill_id"]) in recovered
+    )
     log(f"  {governor_count} bills reached the Governor "
         f"(signed / vetoed / enrolled); reusing {len(reused)} unchanged final records "
         f"and fetching {len(targets)} bills …")
@@ -719,6 +878,23 @@ def main():
     counts = {}
     for b in out_bills:
         counts[b["status"]] = counts.get(b["status"], 0) + 1
+
+    # A signed or vetoed bill must never vanish quietly: LegInfo re-labels its
+    # search row after a late-session veto, a page fetch can fail, or the bill
+    # can be pulled back off the desk.  Whatever the reason, say so loudly —
+    # the cross-check step turns it red, this makes it diagnosable in the log.
+    kept_final = {str(b["bill_id"]) for b in out_bills if b["status"] in FINAL_KINDS}
+    lost_final = sorted(
+        (record.get("measure") or bill_id)
+        for bill_id, record in previous.items()
+        if isinstance(record, dict)
+        and record.get("status") in FINAL_KINDS
+        and bill_id not in kept_final
+    )
+    if lost_final:
+        log(f"  WARNING: {len(lost_final)} previously signed/vetoed bills are "
+            f"missing from this snapshot: {', '.join(lost_final[:12])}"
+            f"{' …' if len(lost_final) > 12 else ''}")
 
     payload = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
