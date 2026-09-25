@@ -1,13 +1,18 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
+import fetch_bills
 from fetch_bills import (
     classify,
+    confirm_offlisted_kind,
     extract_action,
     extract_digest_text,
+    kind_from_leginfo_record,
+    offlisted_desk_bills,
     parse_history_rows,
     parse_latest_vote,
     parse_search_html,
@@ -142,6 +147,90 @@ class VoteTests(unittest.TestCase):
 
     def test_no_votes_returns_none(self):
         self.assertIsNone(parse_latest_vote("<html><body>none</body></html>", "x"))
+
+
+class VetoUnderConsiderationTests(unittest.TestCase):
+    """A late-session veto flips the LegInfo search row off "Vetoed".
+
+    The bill must stay in bills.json, because dropping it loses a recorded veto
+    from the site and makes the gov-vs-LegInfo cross-check fail for good.
+    """
+
+    def setUp(self):
+        self.summary, self.history = parse_status_page(
+            read("leginfo_status_veto_pending.html")
+        )
+
+    def test_status_page_shows_no_veto_date_field(self):
+        # LegInfo has not stamped the veto yet — that is the whole problem.
+        self.assertIsNone(self.summary.get("vetoed_date"))
+        self.assertEqual(self.summary.get("pending_date"), "2026-09-01")
+
+    def test_kind_recovered_from_history_rows(self):
+        self.assertEqual(kind_from_leginfo_record(self.summary, self.history), "vetoed")
+
+    def test_signed_bill_recovered_from_history_rows(self):
+        summary, history = parse_status_page(read("leginfo_status.html"))
+        self.assertEqual(kind_from_leginfo_record(summary, history), "signed")
+
+    def test_bill_back_in_floor_process_is_not_recovered(self):
+        history = [
+            ("2026-09-21", "In Senate. Read and ordered to Third File."),
+            ("2026-09-20", "Returned to the Senate."),
+        ]
+        self.assertIsNone(kind_from_leginfo_record({}, history))
+
+    def test_offlisted_desk_bills_only_returns_tracked_bills(self):
+        bills = parse_search_html(read("leginfo_search.html"))
+        previous = {"202520260AB7": {"status": "pending", "measure": "AB 7"}}
+        offlisted = offlisted_desk_bills(bills, previous)
+        self.assertEqual([b["bill_id"] for b in offlisted], ["202520260AB7"])
+        # Nothing is rescued when the bill was never on the desk list.
+        self.assertEqual(offlisted_desk_bills(bills, {}), [])
+        # A bill whose row still classifies is never a rescue candidate.
+        self.assertEqual(
+            offlisted_desk_bills(bills, {"202520260AB302": {"status": "signed"}}), []
+        )
+
+    def test_confirm_offlisted_kind_reads_the_status_page(self):
+        html = read("leginfo_status_veto_pending.html")
+        calls = []
+        with mock.patch.object(
+            fetch_bills, "fetch_status_page",
+            lambda bill_id: (calls.append(bill_id), html)[1],
+        ):
+            kind, note = confirm_offlisted_kind({"bill_id": "202520260SB632"}, "pending")
+        self.assertEqual(kind, "vetoed")
+        self.assertIsNone(note)
+        self.assertEqual(calls, ["202520260SB632"])
+
+    def test_confirm_offlisted_kind_gives_up_on_floor_process_bill(self):
+        page = (
+            '<label class="statusLabel">Enrolled Date:</label>'
+            '<span id="lastAction"></span>'
+            "<tr><td scope=\"row\">09/21/26</td>"
+            "<td>In Senate. Read and ordered to Third File.</td></tr>"
+        )
+        with mock.patch.object(fetch_bills, "fetch_status_page", lambda bill_id: page), \
+             mock.patch.object(fetch_bills, "fetch_history_page", lambda bill_id: page):
+            kind, note = confirm_offlisted_kind({"bill_id": "202520260SB1"}, "pending")
+        self.assertIsNone(kind)
+        self.assertIsNone(note)
+
+    def test_confirm_offlisted_kind_keeps_record_when_leginfo_unreadable(self):
+        """A failed request is not evidence that the veto did not happen."""
+
+        def boom(bill_id):
+            raise RuntimeError("TLS EOF")
+
+        with mock.patch.object(fetch_bills, "fetch_status_page", boom):
+            kind, note = confirm_offlisted_kind({"bill_id": "202520260SB769"}, "vetoed")
+        self.assertEqual(kind, "vetoed")
+        self.assertIn("status page unreadable", note)
+
+        with mock.patch.object(fetch_bills, "fetch_status_page", boom):
+            kind, _ = confirm_offlisted_kind({"bill_id": "202520260SB769"}, "pending")
+        self.assertIsNone(kind)
 
 
 if __name__ == "__main__":

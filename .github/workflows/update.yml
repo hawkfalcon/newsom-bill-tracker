@@ -40,8 +40,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # --gov lets the LegInfo fetch re-read bills the Governor has already
+      # acted on whose search row LegInfo has re-labelled (a veto returned to
+      # the house for consideration); without it such a bill would vanish.
       - name: Fetch bills from LegInfo
-        run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json
+        run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json --gov data/gov_actions.json
 
       - name: Enrich explanations with Gemini (optional offline batch)
         env:

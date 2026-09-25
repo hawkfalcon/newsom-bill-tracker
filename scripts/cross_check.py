@@ -12,6 +12,17 @@ When a disagreement is still present long after the announcement
 status that never flipped, or a misclassified bill), and this script exits
 non-zero so the GitHub Actions run goes red for a human to look at it.
 
+Two disagreements showed up during the September 2026 signing window and are
+fixed at the source, not here:
+
+  * LegInfo re-labels a vetoed bill's search row once the house takes the bill
+    back ("In Senate. Consideration of Governor's veto pending."), which used
+    to drop the bill from bills.json — fetch_bills now re-reads such bills' own
+    LegInfo records.
+  * A press release that recaps earlier signing rounds lists those bills with
+    the same markup as its own package, so prior-session measure numbers became
+    phantom actions — fetch_gov_updates now skips recap lists.
+
 Usage:
     python scripts/cross_check.py [--bills data/bills.json] \
         [--gov data/gov_actions.json] [--stale-hours 48]
@@ -68,8 +79,14 @@ def main():
         stale = age_hours is not None and age_hours > args.stale_hours
 
         if bill is None:
+            # Two very different things can cause this, and both are worth a
+            # human look: LegInfo has a row for the bill but this snapshot
+            # dropped it, or the measure is not part of the session at all
+            # (a gov.ca.gov post that recapped an earlier session's bills).
             msg = (f"{label}: gov says {act.get('action')} {act.get('date')}, "
-                   f"but the bill is absent from bills.json")
+                   f"but the bill is absent from bills.json — check the "
+                   f"'rechecking their own LegInfo records' / 'WARNING' lines "
+                   f"in the fetch_bills log, then the gov.ca.gov post parse")
             (errors if stale else warnings).append(msg)
             continue
 

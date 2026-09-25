@@ -3,6 +3,8 @@
 Unit tests for scripts/fetch_gov_updates.py
 """
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -20,6 +22,7 @@ from fetch_gov_updates import (
     norm,
     parse_bill_items,
     parse_post,
+    strip_background_lists,
 )
 
 
@@ -277,6 +280,102 @@ class TestCrossPostLinkExclusion(unittest.TestCase):
             },
         }
         self.assertEqual(parse_post(post), {})
+
+
+class TestBackgroundRecapLists(unittest.TestCase):
+    """Narrative posts recap *earlier* signing rounds with real <li> lists.
+
+    Those bills belong to a previous session; their measure numbers are
+    identical, so parsing them as actions of this post fabricates
+    "signed 2026-09-19" entries for bills that do not exist in the session —
+    which is what made the cross-check fail with "absent from bills.json".
+    """
+
+    # Mirrors the structure of
+    # https://www.gov.ca.gov/2026-09-19/governor-newsom-signs-new-laws-to-protect-california-elections-from-trump-interference/
+    ELECTIONS_POST_HTML = """
+        <h1>Governor Newsom signs new laws to protect California elections from Trump interference</h1>
+        <p><strong>LOS ANGELES</strong> &mdash; Governor Gavin Newsom today signed a package
+        of bills to protect elections in California from interference.</p>
+        <h2>The election protection and pro-democracy bill package</h2>
+        <ul>
+        <li><strong>AB 282 (Pellerin)</strong>&ndash; Makes it a felony to seize ballots.</li>
+        <li><strong>SB 259 (Wahab)</strong>&ndash; Makes it a felony to interfere with VBM.</li>
+        <li><strong>AB 2103 (Irwin)</strong> &ndash; Establishes the Engaged California Program.</li>
+        <li><strong>SB 1420 (Richardson)</strong>&ndash; Requires uniform vote-by-mail procedures.</li>
+        </ul>
+        <p>This bill package builds on the Governor&rsquo;s continued protection of elections.
+        Earlier today, the Governor <a href="https://www.gov.ca.gov/2026-09-19/sovereignty/">signed</a>
+        SB 1354 (Archuleta), which preserves California&rsquo;s sovereignty.</p>
+        <h2>A record of defending democracy</h2>
+        <p>Last year, Governor Newsom <a href="https://us.list-manage.com/a">signed</a>:</p>
+        <ul>
+        <li><strong>SB 3 (Cervantes)</strong> &mdash; requires that public vote counts are updated.</li>
+        <li><strong>AB 16 (Alanis)</strong> &mdash; extended the time to process vote by mail ballots.</li>
+        </ul>
+        <p>In 2024, Governor Newsom <a href="https://us.list-manage.com/b">signed</a>:</p>
+        <ul>
+        <li><strong>AB 2655 (Berman)</strong> &mdash; requires large platforms to label content.</li>
+        <li><strong>AB 2839 (Pellerin)</strong> &mdash; expands the deceptive-content timeframe.</li>
+        <li><strong>AB 2355 (Carrillo)</strong> &mdash; requires an AI disclosure on ads.</li>
+        </ul>
+        """
+
+    @staticmethod
+    def _parse(post):
+        """parse_post, with the dropped-recap note swallowed for clean test output."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            return parse_post(post)
+
+    def _post(self, html, title="Governor Newsom signs new laws to protect California elections"):
+        return {
+            "id": 112707,
+            "title": {"rendered": title},
+            "date": "2026-09-19T07:58:25",
+            "date_gmt": "2026-09-19T14:58:25",
+            "link": "https://www.gov.ca.gov/2026-09-19/elections/",
+            "content": {"rendered": html},
+        }
+
+    def test_package_bills_are_kept(self):
+        res = self._parse(self._post(self.ELECTIONS_POST_HTML))
+        for nid in ("ab282", "sb259", "ab2103", "sb1420", "sb1354"):
+            self.assertIn(nid, res, f"{nid} is part of today's package")
+        self.assertEqual(res["ab282"]["action"], "signed")
+        self.assertEqual(res["ab282"]["date"], "2026-09-19")
+
+    def test_recapped_bills_are_not_actions_of_this_post(self):
+        res = self._parse(self._post(self.ELECTIONS_POST_HTML))
+        for nid in ("sb3", "ab16", "ab2655", "ab2839", "ab2355"):
+            self.assertNotIn(nid, res, f"{nid} is background from an earlier session")
+
+    def test_recap_lists_detected_at_the_list_level(self):
+        _, dropped = strip_background_lists(self.ELECTIONS_POST_HTML)
+        self.assertEqual(dropped, ["AB 16", "AB 2355", "AB 2655", "AB 2839", "SB 3"])
+
+    def test_announcement_line_is_never_recap(self):
+        """The official batch format keeps its lists: intro says "signed the
+        following", so it must not be treated as background even though the
+        post also mentions years."""
+        html = (
+            "<p>Gov. Newsom today announced that he signed the following bills "
+            "in 2026:</p><ul><li>AB 1 by X &mdash; topic.</li>"
+            "<li>SB 2 by Y &mdash; topic.</li></ul>"
+        )
+        self.assertEqual(strip_background_lists(html)[1], [])
+        self.assertEqual(len(self._parse(self._post(html))), 2)
+
+    def test_single_bill_post_without_lists_still_parsed(self):
+        # gov.ca.gov renders the post title inside the content, which is what
+        # lets "signs bill …" press releases be recognised at all.
+        html = (
+            "<h1>Governor Newsom signs bill to protect California&rsquo;s sovereignty</h1>"
+            "<p><strong>SACRAMENTO</strong> &mdash; Today the Governor "
+            "<a href=\"https://www.gov.ca.gov/2026-09-19/sovereignty/\">signed</a> "
+            "SB 1354 (Archuleta), a bill that protects California sovereignty.</p>"
+        )
+        res = self._parse(self._post(html, "Governor Newsom signs bill to protect California's sovereignty"))
+        self.assertEqual(list(res), ["sb1354"])
 
 
 if __name__ == "__main__":

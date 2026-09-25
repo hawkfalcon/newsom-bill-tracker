@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><title>Bill Status (veto under consideration fixture)</title></head>
+<body>
+<!-- Representative billStatusClient page for a bill vetoed in the last days of
+the session: the house has not disposed of the veto yet, so LegInfo still lists
+the bill as active/in floor process and shows no "Vetoed Date:" field at all.
+Only the history rows record the Governor's action. Modeled on SB 632
+(202520260SB632) as served on 2026-09-24. -->
+<div>
+<label class="statusLabel">Enrolled Date:</label>
+<span id="lastAction">09/01/26</span>
+<label class="statusLabel">Last Amended Date:</label>
+<span id="lastAction">08/19/26</span>
+</div>
+<table>
+<tr>
+<th>Date</th>
+<th>Action</th>
+</tr>
+<tr>
+<td scope="row">09/20/26</td>
+<td>In Senate. Consideration of Governor's veto pending.</td>
+</tr>
+<tr>
+<td scope="row">09/20/26</td>
+<td>Vetoed by the Governor.</td>
+</tr>
+<tr>
+<td scope="row">09/08/26</td>
+<td>Enrolled and presented to the Governor at 4 p.m.</td>
+</tr>
+<tr>
+<td scope="row">08/30/26</td>
+<td>Assembly amendments concurred in. (Ayes 37. Noes 2.)</td>
+</tr>
+<tr>
+<td scope="row">08/26/26</td>
+<td>In Senate. Concurrence in Assembly amendments pending.</td>
+</tr>
+</table>
+</body>
+</html>
