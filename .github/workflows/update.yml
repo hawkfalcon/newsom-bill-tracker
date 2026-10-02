@@ -66,12 +66,16 @@ jobs:
       - name: Run page behavior tests
         run: node tests/page_test.js index.html
 
-      # Fails the run (no commit) when the two sources genuinely disagree.
-      # A fresh announcement whose LegInfo record has not caught up yet
-      # (within 48 h) is a warning, so the normal gov/LegInfo lag never blocks
-      # a refresh — a real data bug does.
+      # Informational: never gates the refresh. Disagreements are printed in
+      # full and surfaced as annotations on the run (--warn-only keeps the exit
+      # code at 0; continue-on-error covers the checker itself crashing), so a
+      # red run always means the pipeline is broken, not that LegInfo is slow.
+      # Around the Sept 30 deadline the Governor's announcements can outrun
+      # LegInfo's search rows by days across hundreds of bills, and a stale
+      # snapshot would be the worse outcome.
       - name: Cross-check gov.ca.gov against LegInfo
-        run: python scripts/cross_check.py --bills data/bills.json --gov data/gov_actions.json
+        continue-on-error: true
+        run: python scripts/cross_check.py --bills data/bills.json --gov data/gov_actions.json --warn-only
 
       - name: Commit and push
         run: |
