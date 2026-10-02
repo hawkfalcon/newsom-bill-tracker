@@ -1,0 +1,92 @@
+name: Verify page tests on fresh data
+
+# TEMPORARY (deleted before this branch is merged): runs the refresh pipeline
+# up to the page behavior tests against freshly fetched data, records what
+# master's test file and this branch's test file say about that snapshot, and
+# commits the output to the branch. Actions logs are not reachable from the
+# session that wrote this, but branch contents are, so the evidence travels as
+# a file.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch bills from LegInfo
+        run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json --gov data/gov_actions.json
+
+      - name: Fetch Governor's office announcements
+        run: python scripts/fetch_gov_updates.py --out data/gov_actions.json
+
+      - name: Build static site
+        run: python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json --template site/template.html --out index.html
+
+      # Run master's test file first (the version that is red in CI), then the
+      # branch's, against the very same freshly built page.
+      - name: Run page behavior tests (master, then branch)
+        run: |
+          mkdir -p debug
+          git fetch --depth=1 origin master
+          git show FETCH_HEAD:tests/page_test.js > /tmp/master_page_test.js
+          set +e
+          node /tmp/master_page_test.js index.html > debug/before.log 2>&1
+          echo "exit=$?" >> debug/before.log
+          node tests/page_test.js index.html > debug/after.log 2>&1
+          echo "exit=$?" >> debug/after.log
+          set -e
+
+      - name: Dump the fresh snapshot's shape
+        run: |
+          cat > /tmp/dump.js <<'EOF'
+          const fs = require("fs");
+          const html = fs.readFileSync(process.argv[2], "utf-8");
+          const src = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+          const DATA = JSON.parse(src.match(/const DATA = (\{.*?\});\n/s)[1].replace(/\\u003c/g, "<"));
+          const bills = DATA.bills;
+          const cnt = (w, s) => bills.filter(b => (w === "all" || b.wave === w) && b.status === s).length;
+          const waves = DATA.wave_years || [];
+          console.log("generated_at:", DATA.generated_at);
+          console.log("counts:", JSON.stringify(DATA.counts));
+          console.log("wave_years:", JSON.stringify(waves), "default_wave:", DATA.default_wave);
+          for (const w of [...waves, "all"]) {
+            console.log(`wave ${w}: ` + ["signed", "vetoed", "pending"].map(s => `${s}=${cnt(w, s)}`).join(" "));
+          }
+          const q = "education";
+          const pendingEdu = bills.filter(b => b.status === "pending" &&
+            [b.measure, b.title, b.author, b.author_info && b.author_info.name, b.plain_summary || "",
+              ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes(q)).length;
+          console.log(`pending bills matching "${q}":`, pendingEdu);
+          for (const t of ["Health", "Budget"]) {
+            console.log(`topic ${t} in default wave (signed+vetoed):`,
+              bills.filter(b => b.wave === DATA.default_wave && ["signed", "vetoed"].includes(b.status) &&
+                (b.topics || []).includes(t)).length);
+          }
+          EOF
+          node /tmp/dump.js index.html > debug/counts.log 2>&1
+
+      - name: Commit the evidence to this branch
+        if: always()
+        run: |
+          git config user.name "arena-agent"
+          git config user.email "agent@arena.ai"
+          mkdir -p debug
+          git add -f debug
+          if git diff --cached --quiet; then
+            echo "nothing to record"
+          else
+            git commit -m "debug: fresh-data page test output"
+            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          fi
