@@ -16,6 +16,7 @@ import re
 from datetime import datetime, timezone
 
 from enrichment import enrich_payload
+from veto_messages import attach_veto_reasons, load_messages
 
 
 def wave_buttons(years, default_year):
@@ -33,6 +34,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default="data/bills.json")
     ap.add_argument("--gov", default="data/gov_actions.json")
+    ap.add_argument("--veto", default="data/veto_messages.json",
+                    help="plain-English veto reasons keyed by measure")
     ap.add_argument("--template", default="site/template.html")
     ap.add_argument("--out", default="index.html")
     args = ap.parse_args()
@@ -84,6 +87,18 @@ def main():
         d = b.get("action_date") or ""
         b["wave"] = d[:4] if d else None
 
+    # Every veto comes with a signed veto message; show why the Governor said
+    # no in plain English, with the letter itself still one click away.
+    veto_counts = attach_veto_reasons(
+        data.get("bills", []), load_messages(args.veto).get("messages", {}))
+    data["veto_reason_method"] = {
+        "reviewed-v1": "Plain-English summary written by reading the Governor's veto message.",
+        "extract-v1": "The Governor's own reasoning, distilled automatically from his veto message.",
+    }
+    data["veto_reason_counts"] = {
+        k: v for k, v in veto_counts.items() if k != "not_vetoed"
+    }
+
     # Wave tabs are derived from the data so a new session does not need
     # template edits: newest action year first, "All session" always last.
     years = sorted(
@@ -115,6 +130,9 @@ def main():
     print(f"Built {args.out} — signed={counts.get('signed', 0)} "
           f"vetoed={counts.get('vetoed', 0)} pending={counts.get('pending', 0)} "
           f"waves={','.join(data['wave_years'])} ({len(html) // 1024} KB)")
+    vc = data.get("veto_reason_counts", {})
+    print(f"  veto reasons: reviewed={vc.get('reviewed-v1', 0)} "
+          f"auto-extracted={vc.get('extract-v1', 0)} missing={vc.get('missing', 0)}")
 
 
 if __name__ == "__main__":

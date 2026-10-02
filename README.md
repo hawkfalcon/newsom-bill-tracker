@@ -132,6 +132,32 @@ as an outbound rich-detail link.
    fully deterministic. The Gemini call is only an enrichment step; the
    static site has no runtime AI dependency.
 
+## Veto reasons
+
+Every vetoed bill gets a **plain-English "Why vetoed"** note, taken from the
+Governor's own veto message rather than guessed from the bill's subject:
+
+- **`scripts/veto_messages.py`** reads the veto PDF URLs already captured in
+  `data/gov_actions.json`, extracts the reasoning from each letter (dropping the
+  letterhead, the "I am returning … without my signature" opening, the "This bill
+  would …" description, and the "For these reasons, I cannot sign this bill"
+  closing), and caches the result as `reason` + a verbatim `quote` in
+  `data/veto_messages.json`. Run it with `--fetch` on a machine with network
+  egress to fill in newly vetoed bills; without `--fetch` it only reports which
+  vetoed bills are still missing a reason.
+- Curated entries (`method: "reviewed-v1"`, hand-checked against the letter)
+  always win over auto-extracted ones (`method: "extract-v1"`).
+- `scripts/build_site.py --veto` attaches `veto_reason` / `veto_reason_quote` /
+  `veto_reason_method` to each vetoed bill and prints the coverage counts. A
+  vetoed bill with no extractable reason keeps `veto_reason: null` and simply
+  falls back to the "Veto letter" link — the site never invents a reason.
+
+The plain-English summaries were also repaired: the rules-based summarizer drops
+the "This bill would …" lead, which used to leave sentences starting with a
+dangling "that definition" / "the above-described provision". Those
+back-references are now neutralised (`scripts/plain_english.py`,
+`_fix_back_references`) and flagged `back_reference_reworded`.
+
 ## Digital Democracy links
 
 The link format is deterministic:
@@ -211,7 +237,12 @@ python scripts/fetch_bills.py --out data/bills.json \
 python scripts/gemini_enrichment.py --data data/bills.json \
     --source data/.bill_digest_cache.json
 python scripts/fetch_gov_updates.py --out data/gov_actions.json # ~10 s
+# Optional: refresh the plain-English veto reasons (needs network egress).
+# Without --fetch this only reports which vetoed bills still lack a reason.
+python scripts/veto_messages.py --gov data/gov_actions.json \
+    --veto data/veto_messages.json --fetch
 python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json \
+    --veto data/veto_messages.json \
     --template site/template.html --out index.html
 python scripts/cross_check.py --bills data/bills.json --gov data/gov_actions.json
 python -m http.server 8000   # then open http://localhost:8000
@@ -228,8 +259,9 @@ The unit tests cover the LegInfo HTML parsers (with saved fixtures), including
 recovery of a vetoed bill whose LegInfo search row reads as floor process again,
 the gov.ca.gov post parser — including the rules that press-release prose
 cross-references and "In 2024, Governor Newsom signed:" recap lists are not
-treated as bill actions — the cache and enrichment logic, and the merge and
-cross-check code. The page test loads the
+treated as bill actions — the cache and enrichment logic, the veto-reason
+extractor and merge rules (`test_veto_messages.py`), the back-reference repair
+in the plain-English summarizer, and the merge and cross-check code. The page test loads the
 built `index.html` in a minimal DOM stub and exercises the filters, wave
 tabs, topic menu (keyboard included), search, and the gov-announcement
 note. The CI job runs both before committing refreshed data.

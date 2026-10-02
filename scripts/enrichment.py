@@ -12,9 +12,9 @@ import re
 from pathlib import Path
 
 try:
-    from plain_english import summarize_bill
+    from plain_english import _fix_back_references, summarize_bill
 except ImportError:  # Allows importing this module from the repository root in tests.
-    from scripts.plain_english import summarize_bill
+    from scripts.plain_english import _fix_back_references, summarize_bill
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -207,6 +207,18 @@ def enrich_bill(bill, authors=None):
         bill.setdefault("plain_summary_confidence", "medium")
         bill.setdefault("plain_summary_flags", [])
         bill.setdefault("plain_summary_method", "rules-v1")
+        # Stored summaries were generated from the full digest, so they are
+        # kept as-is. Only repair dangling back-references ("Modifies that
+        # definition ..."), which read as broken once the "This bill would"
+        # lead is gone. This is idempotent and changes no other wording.
+        # AI-written summaries are left untouched: they are source-checked
+        # against the digest they were accepted with.
+        if bill.get("plain_summary_method") == "rules-v1":
+            fixed, changed = _fix_back_references(bill["plain_summary"])
+            if changed:
+                bill["plain_summary"] = fixed
+                if "back_reference_reworded" not in bill["plain_summary_flags"]:
+                    bill["plain_summary_flags"].append("back_reference_reworded")
     return bill
 
 

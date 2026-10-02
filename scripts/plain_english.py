@@ -134,6 +134,69 @@ def _clean(value):
     return value
 
 
+# Dropping the "This bill would ..." lead can orphan a back-reference: the
+# digest sentence "This bill would modify that definition" becomes "Modifies
+# that definition", and "that" now points at nothing the reader has seen.
+# Neutralise the demonstrative so the sentence stands on its own. We only
+# touch demonstratives, never conditions, dates, amounts, or exceptions.
+_BACK_REF_NOUNS = (
+    "definition|definitions|term|terms|provision|provisions|program|programs|"
+    "requirement|requirements|prohibition|prohibitions|standard|standards|"
+    "process|processes|list|lists|entity|entities|person|persons|service|"
+    "services|fund|funds|amount|amounts|period|periods|procedure|procedures"
+)
+BACK_REFERENCE_REPLACEMENTS = (
+    (re.compile(r"\bthe above[- ](?:described|mentioned|referenced)\b", re.I), "the"),
+    # ", as described above," is a parenthetical: drop it with its commas so
+    # no stray separator is left behind.
+    (re.compile(r",\s*as (?:described|set forth|provided|noted) above\s*,?", re.I), ""),
+    (re.compile(r"\s*as (?:described|set forth|provided|noted) above\b", re.I), ""),
+)
+
+# "Provides that service ..." uses *that* as a conjunction, not a demonstrative.
+# Never rewrite the demonstrative when one of these verbs introduces a clause.
+_CLAUSE_VERBS = frozenset("""
+    provide provides providing provided specify specifies specifying specified
+    declare declares declaring declared state states stating stated
+    require requires requiring required find finds finding found
+    determine determines determining determined note notes noting noted
+    mean means meaning meant say says saying said
+    establish establishes establishing established hold holds holding held
+""".split())
+
+_DEMONSTRATIVE_RE = re.compile(
+    r"(?P<prev>[A-Za-z]+[ \t]+)?\b(?P<dem>that|those|these|such)[ \t]+"
+    r"(?P<noun>" + _BACK_REF_NOUNS + r")\b",
+    re.I,
+)
+
+
+def _demonstrative_sub(match):
+    prev = (match.group("prev") or "").strip().lower()
+    if match.group("dem").lower() == "that" and prev in _CLAUSE_VERBS:
+        return match.group(0)  # conjunction, leave the clause alone
+    return f"{match.group('prev') or ''}the {match.group('noun')}"
+
+
+def _fix_back_references(text):
+    """Return ``(text, changed)`` with dangling back-references neutralised."""
+    original = text
+    for pattern, repl in BACK_REFERENCE_REPLACEMENTS:
+        text = pattern.sub(repl, text)
+    # The callback declines guarded matches ("provides that ...") by returning
+    # the match unchanged, so `changed` is decided by comparing the result,
+    # not by counting substitutions.
+    text = _DEMONSTRATIVE_RE.sub(_demonstrative_sub, text)
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+    # Removing a parenthetical such as ", as described above," can leave two
+    # separators behind ("zone,, be eligible"); collapse them.
+    text = re.sub(r"(?:,\s*){2,}", ", ", text)
+    text = re.sub(r",\s*([.;:])", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text, text != original
+
+
 def _sentences(text):
     """Split digest prose without requiring a heavyweight NLP dependency."""
     text = _clean(text)
@@ -340,6 +403,9 @@ def summarize_bill(title, digest=None):
                 text = f"{text} {_trim(candidates[1], budget)}"
         confidence = "medium" if truncated else "high"
         flags = ["source_excerpt_truncated"] if truncated else []
+        text, reworded = _fix_back_references(text)
+        if reworded:
+            flags.append("back_reference_reworded")
         return {
             "text": text,
             "confidence": confidence,

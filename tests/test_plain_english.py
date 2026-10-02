@@ -286,5 +286,38 @@ class PlainEnglishTests(unittest.TestCase):
         self.assertIn("source_excerpt_truncated", result["flags"])
 
 
+class BackReferenceTests(unittest.TestCase):
+    """Dropping the "This bill would" lead must not orphan a demonstrative."""
+
+    def test_dangling_demonstrative_is_neutralised(self):
+        result = summarize_bill(
+            "Manufactured homes: definitions.",
+            "This bill would modify that definition to mean a structure "
+            "constructed on or after June 15, 1976.",
+        )
+        self.assertTrue(result["text"].startswith("Modifies the definition"))
+        self.assertIn("back_reference_reworded", result["flags"])
+
+    def test_above_described_reference_is_removed_with_its_commas(self):
+        result = summarize_bill(
+            "Housing: prequalification.",
+            "This bill would prohibit a contractor from being prequalified for "
+            "a contract with the trustees, as described above, unless the "
+            "contractor proves compliance.",
+        )
+        self.assertNotIn("as described above", result["text"])
+        self.assertNotIn(",,", result["text"])
+        self.assertNotIn("trustees,", result["text"])
+
+    def test_conjunction_that_is_left_alone(self):
+        result = summarize_bill(
+            "Peace officers: federal service.",
+            "This bill would provide that service as a sworn federal law "
+            "enforcement officer qualifies toward the training requirement.",
+        )
+        self.assertIn("provides that service", result["text"].lower())
+        self.assertNotIn("back_reference_reworded", result["flags"])
+
+
 if __name__ == "__main__":
     unittest.main()
