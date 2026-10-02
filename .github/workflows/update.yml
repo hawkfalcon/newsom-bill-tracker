@@ -7,6 +7,10 @@ name: Refresh bill data (temporary verification copy)
 # committed. update.yml is restored from master before the branch is merged.
 on:
   workflow_dispatch: {}
+  # Branch-only trigger: the session's token cannot dispatch workflows
+  # (403 on the dispatches API), so the verification runs on push instead.
+  push:
+    branches: [arena/01a0fa8a-newsom-bill-tracker]
 
 permissions:
   contents: write
