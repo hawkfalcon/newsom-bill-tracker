@@ -148,6 +148,15 @@ const pressed = el => el.getAttribute("aria-pressed") === "true";
 // call, in the same process, so grouping always matches whatever the locale
 // produces.
 const fmt = n => Number(n).toLocaleString();
+// The page does not print "Showing 0 of N" for an empty result: it swaps the
+// whole note for "No matches" (site/template.html render()). That branch is
+// reachable in a live snapshot, not just in theory — once the Governor has
+// acted on the session's bills, a pending-only view has nothing left to show,
+// and any narrow query can come up empty. Model the rule here, using the
+// page's own words, so each count-note check agrees with the page in both
+// states instead of silently assuming a non-empty list.
+const countNote = (shown, total) =>
+  shown ? `Showing ${fmt(shown)} of ${fmt(total)}` : "No matches";
 
 // ---------- scenario A: fresh load, no params ----------
 console.log("A: default load (no URL params)");
@@ -155,7 +164,7 @@ console.log("A: default load (no URL params)");
   const e = runPage("");
   check(rows(e.els.list) === defCount,
         `default shows signed+vetoed ${DEF_WAVE}-wave bills: ${defCount} (got ${rows(e.els.list)})`);
-  check(e.els.countnote.textContent === `Showing ${fmt(defCount)} of ${fmt(defCount)}`,
+  check(e.els.countnote.textContent === countNote(defCount, defCount),
         `countnote default (got \u201c${e.els.countnote.textContent}\u201d)`);
   check(pressed(e.els["stat-sign"]) && e.els["stat-sign"].classList.contains("active"), "Signed card active by default");
   check(pressed(e.els["stat-veto"]) && e.els["stat-veto"].classList.contains("active"), "Vetoed card active by default");
@@ -187,7 +196,7 @@ console.log("B: load with ?status=pending&wave=all&q=education");
   ).length;
   const n = rows(e.els.list);
   check(n === expected, `pending \u201ceducation\u201d matches = ${expected} (got ${n})`);
-  check(e.els.countnote.textContent === `Showing ${fmt(expected)} of ${fmt(pendAll)}`,
+  check(e.els.countnote.textContent === countNote(expected, pendAll),
         `countnote against all ${pendAll} pending (got \u201c${e.els.countnote.textContent}\u201d)`);
 }
 
@@ -218,7 +227,9 @@ console.log("D: toggling statuses updates list + URL");
   check(pressed(e.els["stat-veto"]) && !pressed(e.els["stat-sign"]), "click Signed toggles it off");
   check(e.history.calls.at(-1) === "?status=vetoed", `URL now ?status=vetoed (got ${e.history.calls.at(-1)})`);
   const vetoDef = cnt(DEF_WAVE, "vetoed");
-  check(rows(e.els.list) === vetoDef && (vetoDef === 0 ? e.els.countnote.textContent === "No matches" : true),
+  // A wave the Governor has not vetoed in yet legitimately renders an empty
+  // veto-only view, which the count note reports as "No matches".
+  check(rows(e.els.list) === vetoDef && e.els.countnote.textContent === countNote(vetoDef, vetoDef),
         `vetoed-only ${DEF_WAVE} wave = ${vetoDef} (got ${rows(e.els.list)})`);
 
   e.els["stat-veto"].click();                       // last one: guard no-op
@@ -373,7 +384,7 @@ console.log("L: four-digit counts are grouped the same way on both sides");
         `all-session view lists every bill: ${total} (got ${rows(e.els.list)})`);
   // Fails if either side changes how it groups digits (the page dropping
   // toLocaleString, or an expectation going back to bare interpolation).
-  check(e.els.countnote.textContent === `Showing ${fmt(total)} of ${fmt(total)}`,
+  check(e.els.countnote.textContent === countNote(total, total),
         `countnote groups digits exactly as the page does (total ${total}) ` +
         `(got \u201c${e.els.countnote.textContent}\u201d)`);
 }
