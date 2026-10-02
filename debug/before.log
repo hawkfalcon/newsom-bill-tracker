@@ -1,0 +1,73 @@
+A: default load (no URL params)
+  ok  - default shows signed+vetoed 2026-wave bills: 1374 (got 1374)
+  ok  - countnote default (got “Showing 1,374 of 1,374”)
+  ok  - Signed card active by default
+  ok  - Vetoed card active by default
+  ok  - Pending card off by default
+  ok  - author labels link to Digital Democracy author filters
+  ok  - author links carry the session from the data
+  ok  - signed bill rows carry the signed outline class
+  ok  - session flag comes from the data (got “California · 2025–2026”)
+  ok  - URL stays clean on default load
+B: load with ?status=pending&wave=all&q=education
+  ok  - search box pre-filled from ?q
+  ok  - “All session” wave tab selected
+  ok  - only Pending card active
+  ok  - pending “education” matches = 0 (got 0)
+  FAIL-  countnote against all 0 pending (got “No matches”)
+C: topic filter updates list + URL
+  ok  - URL now ?topic=Health (got ?topic=Health)
+  ok  - Health topic filter = 193 (got 193)
+  ok  - topic trigger label stays in sync
+  ok  - popstate applies topic and wave
+D: toggling statuses updates list + URL
+  ok  - click Signed toggles it off
+  ok  - URL now ?status=vetoed (got ?status=vetoed)
+  ok  - vetoed-only 2026 wave = 120 (got 120)
+  ok  - cannot deselect the last remaining status
+  ok  - URL canonical order vetoed,pending (got ?status=vetoed,pending)
+  ok  - vetoed+pending count adds up
+  ok  - URL ?status=pending (got ?status=pending)
+  ok  - URL ?status=signed,pending (got ?status=signed,pending)
+  ok  - URL ?status=signed (got ?status=signed)
+  ok  - URL params dropped when back to default (got /newsom-bill-tracker/)
+  ok  - list back to default count
+E: wave switching + combined URL
+  ok  - URL ?status=vetoed&wave=2025 (got ?status=vetoed&wave=2025)
+  ok  - 2025-wave vetoes = 123 (got 123)
+  ok  - 2025 wave note shown
+  ok  - wave param removed for default (got ?status=vetoed)
+F: keyboard (Enter/Space) activates cards
+  ok  - Enter toggles Signed off
+  ok  - Space toggles Signed back on
+G: popstate re-reads filter state from URL
+  ok  - popstate applies ?status=vetoed
+  ok  - popstate applies ?wave=all
+  ok  - all vetoes listed across waves
+  ok  - vetoed bill rows carry the vetoed outline class
+H: invalid URL params ignored
+  ok  - garbage params fall back to defaults
+  ok  - empty ?q leaves search box empty
+I: pending bills with an announced action say so
+  ok  - no announced-but-pending bills in this snapshot; skipping
+J: topic menu arrow keys + Enter
+  ok  - ArrowDown opens the topic menu
+  ok  - activedescendant starts at option 0 (got topic-opt-0)
+  ok  - two ArrowDowns land on option 2 (got topic-opt-2)
+  ok  - Enter selects Budget (got ?topic=Budget)
+  ok  - menu closes after selection
+  ok  - Budget topic list rendered
+  ok  - click reopens the menu
+  ok  - Escape closes the menu
+  ok  - Escape did not change the topic
+K: card explanations stay under the length cap
+  ok  - searching the longest-explanation measure renders rows (got 1)
+  ok  - summaries rendered on the rows
+  ok  - no card explanation exceeds the cap (longest 473)
+  ok  - over-long explanations are clipped with an ellipsis
+L: four-digit counts are grouped the same way on both sides
+  ok  - all-session view lists every bill: 2497 (got 2497)
+  ok  - countnote groups digits exactly as the page does (total 2497) (got “Showing 2,497 of 2,497”)
+
+1 FAILURE(S)
+exit=1
