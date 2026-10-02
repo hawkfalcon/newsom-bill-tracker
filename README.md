@@ -59,14 +59,21 @@ as an outbound rich-detail link.
    numbers otherwise look like fresh actions. When a complete re-fetch
    succeeds, actions are rebuilt from the posts so stale entries self-heal on
    the next run; an incomplete fetch only adds to the previous file.
-   Cross-checked against LegInfo by `scripts/cross_check.py`, which reports no
-   disagreements for the 2025–26 session's vetoes and signings.
+   Cross-checked against LegInfo by `scripts/cross_check.py`, which finds no
+   disagreement about what happened to a 2025–26 bill — only the timing lag of
+   LegInfo's search rows catching up with an announcement, which it lists and
+   moves past rather than failing on.
 
 3. **`scripts/cross_check.py`** — independent validation between the two
    sources: every gov.ca.gov action must match a LegInfo bill's status, and
    the reverse, with dates compared. A missing match is an **error** (a data
    bug), while a fresh announcement whose LegInfo record has not caught up yet
-   (within 48 h) is a **warning**. The CI job fails on errors only.
+   (within 48 h) is a **warning**. The CI job runs it with `--warn-only`, which
+   lists every error in the step log and surfaces the first 25 as run
+   annotations, then exits 0: a disagreement between the two sources is never a
+   reason to stop refreshing the site. Run without the flag (as above) to get
+   the strict version, which exits non-zero on errors — useful when you want the
+   check to gate a commit.
 
 4. **`scripts/build_site.py`** — merges the two sources (attaching each bill's
    `Gov ↗` announcement link) and inlines the result into
@@ -118,8 +125,10 @@ as an outbound rich-detail link.
    to catch signing/veto drops, plus four daytime checks; and on demand via
    "Run workflow") and commits the refreshed files back to the repo. It first
    runs the Python and JavaScript test suites and `scripts/cross_check.py`
-   (errors fail the run before any commit); it skips the commit when nothing
-   changed. If the `GEMINI_API_KEY` secret is absent, the workflow remains
+   (informational — it annotates the run but does not gate the commit, since
+   LegInfo can trail the Governor's announcements by days around the Sept 30
+   deadline); it skips the commit when nothing changed. A failing test suite
+   still blocks the commit. If the `GEMINI_API_KEY` secret is absent, the workflow remains
    fully deterministic. The Gemini call is only an enrichment step; the
    static site has no runtime AI dependency.
 

@@ -141,6 +141,13 @@ function fakeOption(topic) {
 
 const rows = el => (el.innerHTML.match(/<div class="row(?: [^\"]*)?">/g) || []).length;
 const pressed = el => el.getAttribute("aria-pressed") === "true";
+// The page renders every count through toLocaleString(), so an expectation
+// built by interpolating a raw number silently disagrees the moment a count
+// reaches four digits: the page says "Showing 1,007 of 1,007" while a plain
+// `${n}` says "Showing 1007 of 1007". Format expectations with the very same
+// call, in the same process, so grouping always matches whatever the locale
+// produces.
+const fmt = n => Number(n).toLocaleString();
 
 // ---------- scenario A: fresh load, no params ----------
 console.log("A: default load (no URL params)");
@@ -148,7 +155,7 @@ console.log("A: default load (no URL params)");
   const e = runPage("");
   check(rows(e.els.list) === defCount,
         `default shows signed+vetoed ${DEF_WAVE}-wave bills: ${defCount} (got ${rows(e.els.list)})`);
-  check(e.els.countnote.textContent === `Showing ${defCount} of ${defCount}`,
+  check(e.els.countnote.textContent === `Showing ${fmt(defCount)} of ${fmt(defCount)}`,
         `countnote default (got \u201c${e.els.countnote.textContent}\u201d)`);
   check(pressed(e.els["stat-sign"]) && e.els["stat-sign"].classList.contains("active"), "Signed card active by default");
   check(pressed(e.els["stat-veto"]) && e.els["stat-veto"].classList.contains("active"), "Vetoed card active by default");
@@ -180,7 +187,7 @@ console.log("B: load with ?status=pending&wave=all&q=education");
   ).length;
   const n = rows(e.els.list);
   check(n === expected, `pending \u201ceducation\u201d matches = ${expected} (got ${n})`);
-  check(e.els.countnote.textContent === `Showing ${expected} of ${pendAll}`,
+  check(e.els.countnote.textContent === `Showing ${fmt(expected)} of ${fmt(pendAll)}`,
         `countnote against all ${pendAll} pending (got \u201c${e.els.countnote.textContent}\u201d)`);
 }
 
@@ -350,6 +357,25 @@ console.log("K: card explanations stay under the length cap");
     check(summaries.some(s => s.endsWith("\u2026")),
           "over-long explanations are clipped with an ellipsis");
   }
+}
+
+// ---------- scenario L: four-digit counts keep their thousands separator --
+// Guards the class of breakage where the expectation and the page disagree on
+// number formatting. The "All session" view is used because it is the first
+// view in a session that is guaranteed to grow past 999 rows.
+console.log("L: four-digit counts are grouped the same way on both sides");
+{
+  // What the all-session / all-statuses view can list, i.e. every bill the
+  // page is able to show (statuses outside that set are never rendered).
+  const total = cnt("all", "signed") + cnt("all", "vetoed") + cnt("all", "pending");
+  const e = runPage("?wave=all&status=signed,vetoed,pending");
+  check(rows(e.els.list) === total,
+        `all-session view lists every bill: ${total} (got ${rows(e.els.list)})`);
+  // Fails if either side changes how it groups digits (the page dropping
+  // toLocaleString, or an expectation going back to bare interpolation).
+  check(e.els.countnote.textContent === `Showing ${fmt(total)} of ${fmt(total)}`,
+        `countnote groups digits exactly as the page does (total ${total}) ` +
+        `(got \u201c${e.els.countnote.textContent}\u201d)`);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL CHECKS PASSED");

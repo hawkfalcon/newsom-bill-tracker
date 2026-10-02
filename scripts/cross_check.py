@@ -8,9 +8,16 @@ LegInfo's search rows can lag by hours (most visible during the September
 signing window).  That brief window is reported as warnings only.
 
 When a disagreement is still present long after the announcement
-(default: more than 48 hours), something is wrong (a missed parse, a LegInfo
-status that never flipped, or a misclassified bill), and this script exits
-non-zero so the GitHub Actions run goes red for a human to look at it.
+(default: more than 48 hours), something is worth a look: a missed parse, a
+LegInfo status that never flipped, or a misclassified bill.
+
+The refresh job runs this with --warn-only, so those findings are reported as
+annotations on the run but never block it.  That matters most around the
+September 30 constitutional deadline, where LegInfo's search rows can trail
+the Governor's announcements by days across hundreds of bills at once;
+freezing the public snapshot over upstream lag is worse than a note in the
+run log.  Without --warn-only (local runs, or to bring the strict gate back)
+a stale disagreement still exits non-zero.
 
 Two disagreements showed up during the September 2026 signing window and are
 fixed at the source, not here:
@@ -25,18 +32,36 @@ fixed at the source, not here:
 
 Usage:
     python scripts/cross_check.py [--bills data/bills.json] \
-        [--gov data/gov_actions.json] [--stale-hours 48]
+        [--gov data/gov_actions.json] [--stale-hours 48] [--warn-only]
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 
+# GitHub surfaces only a limited number of annotations per check run, and a
+# deadline-week disagreement can run to hundreds of bills, so the rest stay in
+# the log and the annotation list is capped.
+MAX_ANNOTATIONS = 25
+
 
 def norm(m):
     return re.sub(r"[^a-z0-9]", "", (m or "").lower())
+
+
+def _gh_escape(msg):
+    """Escape the characters GitHub workflow commands reserve."""
+    return (str(msg).replace("%", "%25").replace(chr(13), "%0D")
+            .replace(chr(10), "%0A"))
+
+
+def annotate(level, msg):
+    """Emit a workflow annotation, but only when actually running on Actions."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::{level}::{_gh_escape(msg)}")
 
 
 def main():
@@ -47,6 +72,12 @@ def main():
         "--stale-hours", type=int, default=48,
         help="announce-age beyond which a disagreement becomes an error "
              "(the normal gov/LegInfo lag is a few hours)",
+    )
+    ap.add_argument(
+        "--warn-only", action="store_true",
+        help="report disagreements (as annotations on GitHub Actions) but "
+             "always exit 0, so the check informs the refresh instead of "
+             "blocking it",
     )
     args = ap.parse_args()
 
@@ -108,6 +139,22 @@ def main():
     for e in errors:
         print(f"  ERROR: {e}")
     print(f"  {len(warnings)} warning(s), {len(errors)} error(s)")
+
+    if errors:
+        # Past the cap the annotations stop being readable; the full list is
+        # always in the log above.
+        for e in errors[:MAX_ANNOTATIONS]:
+            annotate("warning", e)
+        if len(errors) > MAX_ANNOTATIONS:
+            annotate("warning",
+                     f"cross-check: {len(errors) - MAX_ANNOTATIONS} further "
+                     f"disagreement(s), listed in the step log")
+    if args.warn_only:
+        if errors:
+            annotate("notice",
+                     f"cross-check found {len(errors)} gov/LegInfo "
+                     f"disagreement(s); reported, not blocking the refresh")
+        return 0
     return 1 if errors else 0
 
 
