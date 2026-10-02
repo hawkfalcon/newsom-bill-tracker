@@ -1,22 +1,34 @@
-name: Refresh bill data (temporary verification copy)
+name: Refresh bill data
 
-# TEMPORARY: this is a branch-only stand-in for update.yml, used to verify the
-# page-test fix against freshly fetched LegInfo data. workflow_dispatch only
-# runs workflows that exist on the default branch, so the verification steps
-# ride on this file's name. The branch pushes only debug/ logs; no data is
-# committed. update.yml is restored from master before the branch is merged.
 on:
+  schedule:
+    # Strategic timing tailored to the California Governor's signing window
+    # and LegInfo update cycles (California Pacific Daylight Time / PDT is UTC-7):
+    #
+    # Peak drop window: Hourly from 1:17pm to 12:17am PT (20:17 to 07:17 UTC)
+    #   Batch signing and veto announcements historically drop between 4pm-9pm PT
+    #   (e.g., the 9/14 batch dropped at 8:02pm PT), with potential midnight drops
+    #   approaching the Sept 30 constitutional deadline. Hourly runs ensure drops are
+    #   caught within ~1 hour rather than waiting until the next morning.
+    #
+    # Morning / Midday checks: 6:17am, 8:17am, 10:17am, 12:17pm PT (13:17, 15:17, 17:17, 19:17 UTC)
+    #   Captures overnight LegInfo chaptering syncs and daytime announcements.
+    #
+    # Minute :17 avoids GitHub Actions top-of-hour scheduler queue backlogs.
+    - cron: "17 0,1,2,3,4,5,6,7,13,15,17,19,20,21,22,23 * * *"
   workflow_dispatch: {}
-  # Branch-only trigger: the session's token cannot dispatch workflows
-  # (403 on the dispatches API), so the verification runs on push instead.
-  push:
-    branches: [arena/01a0fa8a-newsom-bill-tracker]
 
 permissions:
   contents: write
 
+# Keep a manual enrichment run on the feature branch from being cancelled by
+# the separately scheduled refresh on master.
+concurrency:
+  group: refresh-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
+  refresh:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +40,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # --gov lets the LegInfo fetch re-read bills the Governor has already
+      # acted on whose search row LegInfo has re-labelled (a veto returned to
+      # the house for consideration); without it such a bill would vanish.
       - name: Fetch bills from LegInfo
         run: python scripts/fetch_bills.py --out data/bills.json --ai-source data/.bill_digest_cache.json --gov data/gov_actions.json
+
+      - name: Enrich explanations with Gemini (optional offline batch)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # These can be overridden without changing the code. The script
+          # rotates batches across models and falls back if one is unavailable.
+          GEMINI_MODELS: gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.1-flash-lite,gemini-3.5-flash-lite
+        run: python scripts/gemini_enrichment.py --data data/bills.json --source data/.bill_digest_cache.json
 
       - name: Fetch Governor's office announcements
         run: python scripts/fetch_gov_updates.py --out data/gov_actions.json
@@ -37,62 +60,32 @@ jobs:
       - name: Build static site
         run: python scripts/build_site.py --data data/bills.json --gov data/gov_actions.json --template site/template.html --out index.html
 
-      - name: Record the fresh snapshot's shape
-        run: |
-          mkdir -p debug
-          cat > /tmp/dump.js <<'EOF'
-          const fs = require("fs");
-          const html = fs.readFileSync(process.argv[2], "utf-8");
-          const src = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-          const DATA = JSON.parse(src.match(/const DATA = (\{.*?\});\n/s)[1].replace(/\\u003c/g, "<"));
-          const bills = DATA.bills;
-          const cnt = (w, s) => bills.filter(b => (w === "all" || b.wave === w) && b.status === s).length;
-          const waves = DATA.wave_years || [];
-          console.log("generated_at:", DATA.generated_at);
-          console.log("counts:", JSON.stringify(DATA.counts));
-          console.log("wave_years:", JSON.stringify(waves), "default_wave:", DATA.default_wave);
-          for (const w of [...waves, "all"]) {
-            console.log(`wave ${w}: ` + ["signed", "vetoed", "pending"].map(s => `${s}=${cnt(w, s)}`).join(" "));
-          }
-          const q = "education";
-          const pendingEdu = bills.filter(b => b.status === "pending" &&
-            [b.measure, b.title, b.author, b.author_info && b.author_info.name, b.plain_summary || "",
-              ...(b.topics || []), b.action || ""].join(" ").toLowerCase().includes(q)).length;
-          console.log(`pending bills matching "${q}":`, pendingEdu);
-          for (const t of ["Health", "Budget"]) {
-            console.log(`topic ${t} in default wave (signed+vetoed):`,
-              bills.filter(b => b.wave === DATA.default_wave && ["signed", "vetoed"].includes(b.status) &&
-                (b.topics || []).includes(t)).length);
-          }
-          EOF
-          node /tmp/dump.js index.html > debug/counts.log 2>&1
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
 
-      # master's test file is what CI is currently red with; run it first so the
-      # recorded failure can be compared with the branch's fixed file.
-      - name: Run page behavior tests (master, then branch)
-        run: |
-          mkdir -p debug
-          git fetch --depth=1 origin master
-          git show FETCH_HEAD:tests/page_test.js > /tmp/master_page_test.js
-          set +e
-          node /tmp/master_page_test.js index.html > debug/before.log 2>&1
-          echo "exit=$?" >> debug/before.log
-          node tests/page_test.js index.html > debug/after.log 2>&1
-          after=$?
-          echo "exit=$after" >> debug/after.log
-          set -e
-          exit $after
+      - name: Run page behavior tests
+        run: node tests/page_test.js index.html
 
-      - name: Commit the evidence to this branch
-        if: always()
+      # Informational: never gates the refresh. Disagreements are printed in
+      # full and surfaced as annotations on the run (--warn-only keeps the exit
+      # code at 0; continue-on-error covers the checker itself crashing), so a
+      # red run always means the pipeline is broken, not that LegInfo is slow.
+      # Around the Sept 30 deadline the Governor's announcements can outrun
+      # LegInfo's search rows by days across hundreds of bills, and a stale
+      # snapshot would be the worse outcome.
+      - name: Cross-check gov.ca.gov against LegInfo
+        continue-on-error: true
+        run: python scripts/cross_check.py --bills data/bills.json --gov data/gov_actions.json --warn-only
+
+      - name: Commit and push
         run: |
-          git config user.name "arena-agent"
-          git config user.email "agent@arena.ai"
-          mkdir -p debug
-          git add -f debug
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/bills.json data/gov_actions.json data/leginfo_cache.json index.html
           if git diff --cached --quiet; then
-            echo "nothing to record"
+            echo "No changes to commit"
           else
-            git commit -m "debug: fresh-data page test output"
-            git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+            git commit -m "chore: refresh bill data ($(date -u +%Y-%m-%d))"
+            git pull --rebase origin "${GITHUB_REF#refs/heads/}"
+            git push
           fi
